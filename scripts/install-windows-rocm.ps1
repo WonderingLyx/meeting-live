@@ -446,21 +446,36 @@ function Invoke-RetryingDownload($Url, $Destination, [int64]$ExpectedLength) {
     $lastError = ""
     for ($attempt = 1; $attempt -le 4; $attempt++) {
         foreach ($method in $methods) {
-            if (Test-Path -LiteralPath $tempPath) {
-                Remove-Item -LiteralPath $tempPath -Force
-            }
             try {
+                if (Test-ArtifactFile $Destination $ExpectedLength) {
+                    Write-Ok "Using cached $(Split-Path -Leaf $Destination)"
+                    return
+                }
+                if (Test-Path -LiteralPath $tempPath) {
+                    $partialLength = (Get-Item -LiteralPath $tempPath).Length
+                    if ($ExpectedLength -gt 0 -and $partialLength -gt $ExpectedLength) {
+                        Write-Warn "Partial file is larger than remote size. Restarting this artifact download."
+                        Remove-Item -LiteralPath $tempPath -Force
+                    } elseif ($method.Kind -ne "curl") {
+                        Write-Warn ("Keeping partial file for curl resume; skipping {0} because it cannot resume." -f $method.Name)
+                        continue
+                    } elseif ($partialLength -gt 0) {
+                        Write-Host ("Resuming partial download: {0:N1} MB" -f ($partialLength / 1MB))
+                    }
+                }
                 Write-Host ("Downloading with {0} (attempt {1}/4)" -f $method.Name, $attempt)
                 if ($method.Kind -eq "curl") {
-                    Invoke-External $method.Path @(
+                    $curlArgs = @(
                         "--fail",
                         "--location",
                         "--retry", "5",
                         "--retry-delay", "2",
                         "--connect-timeout", "30",
+                        "--continue-at", "-",
                         "--output", $tempPath,
                         $Url
-                    ) "curl.exe download failed"
+                    )
+                    Invoke-External $method.Path $curlArgs "curl.exe download failed"
                 } elseif ($method.Kind -eq "bits") {
                     Start-BitsTransfer -Source $Url -Destination $tempPath -ErrorAction Stop
                 } else {
@@ -494,9 +509,9 @@ function Invoke-RetryingDownload($Url, $Destination, [int64]$ExpectedLength) {
     }
 
     if (Test-Path -LiteralPath $tempPath) {
-        Remove-Item -LiteralPath $tempPath -Force
+        Write-Warn "Partial download kept for resume: $tempPath"
     }
-    throw "Download failed after retries: $Url. Last error: $lastError"
+    throw "Download failed after retries: $Url. Rerun the installer to resume from the .part file. Last error: $lastError"
 }
 
 function Test-ArtifactFile($Path, [int64]$ExpectedLength) {
@@ -529,6 +544,7 @@ function Get-ArtifactUrls($Artifact) {
 function Save-ArtifactIfNeeded($Artifact, $CacheDir) {
     New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
     $target = Join-Path $CacheDir $Artifact.File
+    $partial = "$target.part"
     $sourceUrls = Get-ArtifactUrls $Artifact
     $remoteLength = 0
     foreach ($url in $sourceUrls) {
@@ -542,8 +558,23 @@ function Save-ArtifactIfNeeded($Artifact, $CacheDir) {
             Write-Ok "Using cached $($Artifact.File)"
             return $target
         }
-        Write-Warn "Cached file is incomplete or size changed: $($Artifact.File). Redownloading."
-        Remove-Item -LiteralPath $target -Force
+        $localLength = (Get-Item -LiteralPath $target).Length
+        if ($remoteLength -gt 0 -and $localLength -gt 0 -and $localLength -lt $remoteLength) {
+            Write-Warn "Cached target is incomplete; moving it to .part for resume: $($Artifact.File)"
+            if ((Test-Path -LiteralPath $partial) -and (Get-Item -LiteralPath $partial).Length -ge $localLength) {
+                Remove-Item -LiteralPath $target -Force
+            } else {
+                Move-Item -LiteralPath $target -Destination $partial -Force
+            }
+        } else {
+            Write-Warn "Cached file is invalid or size changed: $($Artifact.File). Restarting this artifact download."
+            Remove-Item -LiteralPath $target -Force
+        }
+    }
+    if (Test-ArtifactFile $partial $remoteLength) {
+        Write-Ok "Promoting completed partial download: $($Artifact.File)"
+        Move-Item -LiteralPath $partial -Destination $target -Force
+        return $target
     }
 
     Write-Host "Downloading $($Artifact.File)"
@@ -561,7 +592,13 @@ function Save-ArtifactIfNeeded($Artifact, $CacheDir) {
             Write-Warn "Download source failed: $url"
             Write-Warn $lastError
             if (Test-Path -LiteralPath $target) {
-                Remove-Item -LiteralPath $target -Force
+                if (Test-ArtifactFile $target $length) {
+                    return $target
+                }
+                $targetLength = (Get-Item -LiteralPath $target).Length
+                if ($length -gt 0 -and $targetLength -gt 0 -and $targetLength -lt $length) {
+                    Move-Item -LiteralPath $target -Destination $partial -Force
+                }
             }
         }
     }
