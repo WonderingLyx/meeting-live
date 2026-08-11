@@ -42,6 +42,30 @@ Useful options:
 .\scripts\install-windows-rocm.cmd -StartServer
 ```
 
+China mirror mode is enabled by default for Python/npm/model downloads:
+
+```powershell
+.\scripts\install-windows-rocm.cmd -MirrorMode China
+```
+
+This uses:
+
+- PyPI: `https://pypi.tuna.tsinghua.edu.cn/simple`, then `https://mirrors.aliyun.com/pypi/simple`, then the official PyPI index as fallback.
+- npm: `https://registry.npmmirror.com/`, then the official npm registry as fallback.
+- Hugging Face: `HF_ENDPOINT=https://hf-mirror.com` written into `.env`.
+- ModelScope models keep using ModelScope.
+
+AMD's Windows ROCm 7.2.1 wheel artifacts do not currently have a verified public China mirror. The script supports private mirrors and always keeps AMD's official repository as fallback:
+
+```powershell
+.\scripts\install-windows-rocm.cmd `
+  -RocmBaseUrls "https://your-mirror.example.com/rocm/windows/rocm-rel-7.2.1"
+```
+
+The mirror directory must expose the same filenames as AMD's repository, for example `rocm_sdk_core-7.2.1-py3-none-win_amd64.whl` and `torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl`.
+
+If a network is unstable, rerun the same command. Valid downloads are reused from `.download-cache\rocm-win-7.2.1`, and incomplete `.part` files are discarded.
+
 If Python 3.12 is not found automatically:
 
 ```powershell
@@ -143,7 +167,7 @@ The expected result is `hip` not empty and `gpu available: True`.
 Install the remaining Python dependencies after ROCm PyTorch:
 
 ```bash
-python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 python -m pip check
 ```
 
@@ -153,7 +177,7 @@ If `pip` tries to replace the ROCm PyTorch wheel, reinstall the ROCm PyTorch com
 
 ```bash
 cd web
-npm install
+npm install --registry=https://registry.npmmirror.com/
 npm run build
 cd ..
 ```

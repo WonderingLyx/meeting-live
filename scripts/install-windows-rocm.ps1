@@ -10,6 +10,12 @@ param(
     [switch]$ForceFrontendBuild,
     [switch]$SkipFrontendBuild,
     [switch]$SkipGpuCheck,
+    [ValidateSet("China", "Official", "Auto")]
+    [string]$MirrorMode = "China",
+    [string[]]$RocmBaseUrls = @(),
+    [string[]]$PipIndexUrls = @(),
+    [string[]]$NpmRegistries = @(),
+    [string]$HfEndpoint = "",
     [switch]$StartServer
 )
 
@@ -20,19 +26,27 @@ $env:PIP_DISABLE_PIP_VERSION_CHECK = "1"
 $RocmVersion = "7.2.1"
 $TorchVersion = "2.9.1+rocm7.2.1"
 $TorchVisionVersion = "0.24.1+rocm7.2.1"
-$RocmBaseUrl = "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1"
+$OfficialRocmBaseUrl = "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1"
+$ChinaPipIndexUrls = @(
+    "https://pypi.tuna.tsinghua.edu.cn/simple",
+    "https://mirrors.aliyun.com/pypi/simple"
+)
+$OfficialPipIndexUrl = "https://pypi.org/simple"
+$ChinaNpmRegistries = @("https://registry.npmmirror.com/")
+$OfficialNpmRegistry = "https://registry.npmjs.org/"
+$ChinaHfEndpoint = "https://hf-mirror.com"
 
 $RocmRuntimeArtifacts = @(
-    @{ Package = "rocm-sdk-core"; VersionPrefix = "7.2.1"; File = "rocm_sdk_core-7.2.1-py3-none-win_amd64.whl"; Url = "$RocmBaseUrl/rocm_sdk_core-7.2.1-py3-none-win_amd64.whl" },
-    @{ Package = "rocm-sdk-devel"; VersionPrefix = "7.2.1"; File = "rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl"; Url = "$RocmBaseUrl/rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl" },
-    @{ Package = "rocm-sdk-libraries-custom"; VersionPrefix = "7.2.1"; File = "rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl"; Url = "$RocmBaseUrl/rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl" },
-    @{ Package = "rocm"; VersionPrefix = "7.2.1"; File = "rocm-7.2.1.tar.gz"; Url = "$RocmBaseUrl/rocm-7.2.1.tar.gz" }
+    @{ Package = "rocm-sdk-core"; VersionPrefix = "7.2.1"; File = "rocm_sdk_core-7.2.1-py3-none-win_amd64.whl"; UrlFile = "rocm_sdk_core-7.2.1-py3-none-win_amd64.whl"; Url = "$OfficialRocmBaseUrl/rocm_sdk_core-7.2.1-py3-none-win_amd64.whl" },
+    @{ Package = "rocm-sdk-devel"; VersionPrefix = "7.2.1"; File = "rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl"; UrlFile = "rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl"; Url = "$OfficialRocmBaseUrl/rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl" },
+    @{ Package = "rocm-sdk-libraries-custom"; VersionPrefix = "7.2.1"; File = "rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl"; UrlFile = "rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl"; Url = "$OfficialRocmBaseUrl/rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl" },
+    @{ Package = "rocm"; VersionPrefix = "7.2.1"; File = "rocm-7.2.1.tar.gz"; UrlFile = "rocm-7.2.1.tar.gz"; Url = "$OfficialRocmBaseUrl/rocm-7.2.1.tar.gz" }
 )
 
 $TorchArtifacts = @(
-    @{ Package = "torch"; VersionPrefix = $TorchVersion; File = "torch-2.9.1+rocm7.2.1-cp312-cp312-win_amd64.whl"; Url = "$RocmBaseUrl/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" },
-    @{ Package = "torchaudio"; VersionPrefix = $TorchVersion; File = "torchaudio-2.9.1+rocm7.2.1-cp312-cp312-win_amd64.whl"; Url = "$RocmBaseUrl/torchaudio-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" },
-    @{ Package = "torchvision"; VersionPrefix = $TorchVisionVersion; File = "torchvision-0.24.1+rocm7.2.1-cp312-cp312-win_amd64.whl"; Url = "$RocmBaseUrl/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" }
+    @{ Package = "torch"; VersionPrefix = $TorchVersion; File = "torch-2.9.1+rocm7.2.1-cp312-cp312-win_amd64.whl"; UrlFile = "torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl"; Url = "$OfficialRocmBaseUrl/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" },
+    @{ Package = "torchaudio"; VersionPrefix = $TorchVersion; File = "torchaudio-2.9.1+rocm7.2.1-cp312-cp312-win_amd64.whl"; UrlFile = "torchaudio-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl"; Url = "$OfficialRocmBaseUrl/torchaudio-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" },
+    @{ Package = "torchvision"; VersionPrefix = $TorchVisionVersion; File = "torchvision-0.24.1+rocm7.2.1-cp312-cp312-win_amd64.whl"; UrlFile = "torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl"; Url = "$OfficialRocmBaseUrl/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" }
 )
 
 function Write-Step($Message) {
@@ -76,6 +90,97 @@ function Initialize-InstallLog {
         Write-Host "Log: $logPath"
     } catch {
         Write-Warn "Unable to start transcript: $($_.Exception.Message)"
+    }
+}
+
+function Add-UniqueValue([System.Collections.ArrayList]$List, $Value) {
+    $valueText = [string]$Value
+    if (-not $valueText) {
+        return
+    }
+    $valueText = $valueText.Trim()
+    if (-not $valueText) {
+        return
+    }
+    foreach ($existing in $List) {
+        if ([string]::Equals([string]$existing, $valueText, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return
+        }
+    }
+    [void]$List.Add($valueText)
+}
+
+function Add-ListValues([System.Collections.ArrayList]$List, $Values) {
+    foreach ($value in @($Values)) {
+        if ($null -eq $value) {
+            continue
+        }
+        foreach ($part in ([string]$value -split "[,;]")) {
+            Add-UniqueValue $List $part
+        }
+    }
+}
+
+function Join-Url($Base, $Leaf) {
+    return "$(([string]$Base).TrimEnd('/'))/$Leaf"
+}
+
+function Resolve-InstallerMirrors {
+    $script:ResolvedRocmBaseUrls = New-Object System.Collections.ArrayList
+    $script:ResolvedPipIndexUrls = New-Object System.Collections.ArrayList
+    $script:ResolvedNpmRegistries = New-Object System.Collections.ArrayList
+
+    Add-ListValues $script:ResolvedRocmBaseUrls $RocmBaseUrls
+    Add-ListValues $script:ResolvedRocmBaseUrls $env:ROCM_BASE_URLS
+    if ($script:ResolvedRocmBaseUrls.Count -eq 0 -and $MirrorMode -ne "Official") {
+        Write-Warn "No verified public China mirror is known for AMD ROCm Windows wheels. Use -RocmBaseUrls or ROCM_BASE_URLS if you have a private mirror. Falling back to AMD official URLs."
+    }
+    Add-UniqueValue $script:ResolvedRocmBaseUrls $OfficialRocmBaseUrl
+
+    Add-ListValues $script:ResolvedPipIndexUrls $PipIndexUrls
+    if ($script:ResolvedPipIndexUrls.Count -eq 0) {
+        if ($env:PIP_INDEX_URL) {
+            Add-ListValues $script:ResolvedPipIndexUrls $env:PIP_INDEX_URL
+        } elseif ($MirrorMode -eq "Official") {
+            Add-UniqueValue $script:ResolvedPipIndexUrls $OfficialPipIndexUrl
+        } else {
+            Add-ListValues $script:ResolvedPipIndexUrls $ChinaPipIndexUrls
+            Add-UniqueValue $script:ResolvedPipIndexUrls $OfficialPipIndexUrl
+        }
+    } elseif ($MirrorMode -ne "Official") {
+        Add-UniqueValue $script:ResolvedPipIndexUrls $OfficialPipIndexUrl
+    }
+
+    Add-ListValues $script:ResolvedNpmRegistries $NpmRegistries
+    if ($script:ResolvedNpmRegistries.Count -eq 0) {
+        if ($env:NPM_CONFIG_REGISTRY) {
+            Add-ListValues $script:ResolvedNpmRegistries $env:NPM_CONFIG_REGISTRY
+        } elseif ($MirrorMode -eq "Official") {
+            Add-UniqueValue $script:ResolvedNpmRegistries $OfficialNpmRegistry
+        } else {
+            Add-ListValues $script:ResolvedNpmRegistries $ChinaNpmRegistries
+            Add-UniqueValue $script:ResolvedNpmRegistries $OfficialNpmRegistry
+        }
+    } elseif ($MirrorMode -ne "Official") {
+        Add-UniqueValue $script:ResolvedNpmRegistries $OfficialNpmRegistry
+    }
+
+    if ($HfEndpoint) {
+        $script:ResolvedHfEndpoint = $HfEndpoint.Trim().TrimEnd("/")
+    } elseif ($env:HF_ENDPOINT) {
+        $script:ResolvedHfEndpoint = $env:HF_ENDPOINT.Trim().TrimEnd("/")
+    } elseif ($MirrorMode -eq "Official") {
+        $script:ResolvedHfEndpoint = ""
+    } else {
+        $script:ResolvedHfEndpoint = $ChinaHfEndpoint
+    }
+
+    Write-Host "Mirror mode: $MirrorMode"
+    Write-Host "ROCm sources: $($script:ResolvedRocmBaseUrls -join ', ')"
+    Write-Host "pip indexes: $($script:ResolvedPipIndexUrls -join ', ')"
+    Write-Host "npm registries: $($script:ResolvedNpmRegistries -join ', ')"
+    if ($script:ResolvedHfEndpoint) {
+        Write-Host "Hugging Face endpoint: $script:ResolvedHfEndpoint"
     }
 }
 
@@ -394,13 +499,58 @@ function Invoke-RetryingDownload($Url, $Destination, [int64]$ExpectedLength) {
     throw "Download failed after retries: $Url. Last error: $lastError"
 }
 
+function Test-ZipArchive($Path) {
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+        $zip.Dispose()
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Test-ArtifactFile($Path, [int64]$ExpectedLength) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+    $item = Get-Item -LiteralPath $Path
+    if ($item.Length -le 0) {
+        return $false
+    }
+    if ($ExpectedLength -gt 0 -and $item.Length -ne $ExpectedLength) {
+        return $false
+    }
+    if ($Path.EndsWith(".whl", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return (Test-ZipArchive $Path)
+    }
+    return $true
+}
+
+function Get-ArtifactUrls($Artifact) {
+    $urls = New-Object System.Collections.ArrayList
+    foreach ($baseUrl in $script:ResolvedRocmBaseUrls) {
+        if ($Artifact.UrlFile) {
+            Add-UniqueValue $urls (Join-Url $baseUrl $Artifact.UrlFile)
+        }
+    }
+    Add-UniqueValue $urls $Artifact.Url
+    return @($urls)
+}
+
 function Save-ArtifactIfNeeded($Artifact, $CacheDir) {
     New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
     $target = Join-Path $CacheDir $Artifact.File
-    $remoteLength = Get-RemoteContentLength $Artifact.Url
+    $sourceUrls = Get-ArtifactUrls $Artifact
+    $remoteLength = 0
+    foreach ($url in $sourceUrls) {
+        $remoteLength = Get-RemoteContentLength $url
+        if ($remoteLength -gt 0) {
+            break
+        }
+    }
     if (Test-Path -LiteralPath $target) {
-        $localLength = (Get-Item -LiteralPath $target).Length
-        if ($localLength -gt 0 -and ($remoteLength -le 0 -or $localLength -eq $remoteLength)) {
+        if (Test-ArtifactFile $target $remoteLength) {
             Write-Ok "Using cached $($Artifact.File)"
             return $target
         }
@@ -409,14 +559,48 @@ function Save-ArtifactIfNeeded($Artifact, $CacheDir) {
     }
 
     Write-Host "Downloading $($Artifact.File)"
-    Invoke-RetryingDownload $Artifact.Url $target $remoteLength
-    if (-not (Test-Path -LiteralPath $target) -or (Get-Item -LiteralPath $target).Length -le 0) {
-        throw "Download failed: $($Artifact.Url)"
+    $lastError = ""
+    foreach ($url in $sourceUrls) {
+        try {
+            $length = Get-RemoteContentLength $url
+            Invoke-RetryingDownload $url $target $length
+            if (-not (Test-ArtifactFile $target $length)) {
+                throw "downloaded artifact failed validation"
+            }
+            return $target
+        } catch {
+            $lastError = $_.Exception.Message
+            Write-Warn "Download source failed: $url"
+            Write-Warn $lastError
+            if (Test-Path -LiteralPath $target) {
+                Remove-Item -LiteralPath $target -Force
+            }
+        }
     }
-    if ($remoteLength -gt 0 -and (Get-Item -LiteralPath $target).Length -ne $remoteLength) {
-        throw "Downloaded size mismatch for $($Artifact.File). Delete it from $CacheDir and rerun."
+    throw "Download failed for $($Artifact.File). Last error: $lastError"
+}
+
+function Invoke-PipInstallWithMirrors($Python, [string[]]$InstallArgs, $Description) {
+    $lastError = ""
+    foreach ($indexUrl in $script:ResolvedPipIndexUrls) {
+        try {
+            Write-Host "pip index: $indexUrl"
+            $args = @(
+                "-m", "pip"
+            ) + $InstallArgs + @(
+                "--index-url", $indexUrl,
+                "--retries", "5",
+                "--timeout", "120",
+                "--prefer-binary"
+            )
+            Invoke-External $Python $args $Description
+            return
+        } catch {
+            $lastError = $_.Exception.Message
+            Write-Warn "$Description via $indexUrl failed: $lastError"
+        }
     }
-    return $target
+    throw "$Description failed with all pip indexes. Last error: $lastError"
 }
 
 function Install-ArtifactGroup($Python, $Artifacts, $CacheDir, $Description, $Force, $ReadyTest) {
@@ -428,8 +612,8 @@ function Install-ArtifactGroup($Python, $Artifacts, $CacheDir, $Description, $Fo
     foreach ($artifact in $Artifacts) {
         $files += (Save-ArtifactIfNeeded $artifact $CacheDir)
     }
-    $args = @("-m", "pip", "install") + $files
-    Invoke-External $Python $args "Failed to install $Description"
+    $args = @("install") + $files
+    Invoke-PipInstallWithMirrors $Python $args "Failed to install $Description"
 }
 
 function Test-ProjectDepsReady($Python) {
@@ -456,7 +640,7 @@ function Install-ProjectDeps($Python, $Force) {
     Get-Content -LiteralPath "requirements.txt" -Encoding UTF8 |
         Where-Object { $_ -notmatch "^\s*(torch|torchaudio|torchvision)==" } |
         Set-Content -LiteralPath $tempRequirements -Encoding UTF8
-    Invoke-External $Python @("-m", "pip", "install", "-r", $tempRequirements) "Failed to install project dependencies"
+    Invoke-PipInstallWithMirrors $Python @("install", "-r", $tempRequirements) "Failed to install project dependencies"
     Invoke-External $Python @("-m", "pip", "check") "pip check failed"
 }
 
@@ -488,7 +672,31 @@ function Ensure-EnvConfig {
     Set-EnvFileValue ".env" "ASR_DEVICE" "cuda"
     Set-EnvFileValue ".env" "ASR_LOAD_TIMEOUT_SEC" "3600"
     Set-EnvFileValue ".env" "HF_HUB_DISABLE_XET" "1"
+    if ($script:ResolvedHfEndpoint) {
+        Set-EnvFileValue ".env" "HF_ENDPOINT" $script:ResolvedHfEndpoint
+    }
     Set-EnvFileValue ".env" "PYANNOTE_ROCM_DISABLE_LSTM_DROPOUT" "1"
+}
+
+function Invoke-NpmInstallWithMirrors($Npm) {
+    $lastError = ""
+    foreach ($registry in $script:ResolvedNpmRegistries) {
+        try {
+            Write-Host "npm registry: $registry"
+            Invoke-External $Npm.Source @(
+                "install",
+                "--registry=$registry",
+                "--fetch-retries=5",
+                "--fetch-retry-mintimeout=20000",
+                "--fetch-retry-maxtimeout=120000"
+            ) "npm install failed"
+            return
+        } catch {
+            $lastError = $_.Exception.Message
+            Write-Warn "npm install via $registry failed: $lastError"
+        }
+    }
+    throw "npm install failed with all registries. Last error: $lastError"
 }
 
 function Ensure-FrontendBuild($Force, $Skip) {
@@ -506,7 +714,7 @@ function Ensure-FrontendBuild($Force, $Skip) {
     }
     Push-Location "web"
     try {
-        Invoke-External $npm.Source @("install") "npm install failed"
+        Invoke-NpmInstallWithMirrors $npm
         Invoke-External $npm.Source @("run", "build") "npm run build failed"
     } finally {
         Pop-Location
@@ -523,6 +731,7 @@ try {
     $ProjectRoot = Resolve-ProjectRoot
     Set-Location $ProjectRoot
     Initialize-InstallLog
+    Resolve-InstallerMirrors
 
     Write-Step "Checking AMD GPU"
     Assert-AMDGraphics $SkipGpuCheck
@@ -533,7 +742,7 @@ try {
 
     Write-Step "Creating isolated ROCm virtual environment"
     $VenvPython = Create-Or-RecreateVenv $PythonExe $VenvPath $RecreateVenv
-    Invoke-External $VenvPython @("-m", "pip", "install", "-U", "pip", "wheel", "setuptools") "Failed to update pip tooling"
+    Invoke-PipInstallWithMirrors $VenvPython @("install", "-U", "pip", "wheel", "setuptools") "Failed to update pip tooling"
 
     Write-Step "Installing AMD ROCm runtime"
     Install-ArtifactGroup $VenvPython $RocmRuntimeArtifacts $WheelCache "AMD ROCm runtime $RocmVersion" $ForceRocmRuntime {
