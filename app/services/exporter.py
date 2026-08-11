@@ -1,0 +1,268 @@
+"""导出器：SRT / WebVTT / Markdown / JSON"""
+import json
+from typing import Iterable
+
+
+def _format_srt_time(seconds: float) -> str:
+    """SRT 时间码 HH:MM:SS,mmm"""
+    ms_total = int(round(seconds * 1000))
+    hours, rem = divmod(ms_total, 3600 * 1000)
+    minutes, rem = divmod(rem, 60 * 1000)
+    secs, ms = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+
+
+def _format_vtt_time(seconds: float) -> str:
+    """WebVTT 时间码 HH:MM:SS.mmm"""
+    ms_total = int(round(seconds * 1000))
+    hours, rem = divmod(ms_total, 3600 * 1000)
+    minutes, rem = divmod(rem, 60 * 1000)
+    secs, ms = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}.{ms:03d}"
+
+
+def _speaker_label(speaker_id, speaker_aliases):
+    if not speaker_id:
+        return ""
+    name = speaker_aliases.get(speaker_id, speaker_id)
+    return f"[{name}] "
+
+
+def _segment_text(seg, speaker_aliases, prefix_format: str) -> str:
+    text = (seg.get("text") or "").strip()
+    if not text:
+        return ""
+    label = _speaker_label(seg.get("speaker_id"), speaker_aliases)
+    return label + text if prefix_format == "bracket" else f"{label}{text}".strip()
+
+
+def export_srt(segments: Iterable[dict], speaker_aliases: dict) -> str:
+    """SRT 字幕格式
+
+    如果 segment 有 words (字级时间戳),每个字单独一行,精度 0.01s。
+    否则按 segment 整体时间。
+    """
+    out_lines = []
+    idx = 1
+    for seg in segments:
+        text = _segment_text(seg, speaker_aliases, "bracket")
+        if not text:
+            continue
+        words = seg.get("words")
+        if words:
+            # 字级:每个字一个 SRT 块,start/end 来自 words
+            for w in words:
+                if not w.get("text") or not w.get("text").strip():
+                    continue
+                start = _format_srt_time(w["start"] + seg.get("start_time", 0.0))
+                end = _format_srt_time(w["end"] + seg.get("start_time", 0.0))
+                out_lines.append(str(idx))
+                out_lines.append(f"{start} --> {end}")
+                out_lines.append(w["text"])
+                out_lines.append("")
+                idx += 1
+        else:
+            start = _format_srt_time(seg["start_time"])
+            end = _format_srt_time(seg["end_time"])
+            out_lines.append(str(idx))
+            out_lines.append(f"{start} --> {end}")
+            out_lines.append(text)
+            out_lines.append("")
+            idx += 1
+    return "\n".join(out_lines)
+
+
+def export_vtt(segments: Iterable[dict], speaker_aliases: dict) -> str:
+    """WebVTT 字幕格式
+
+    如果 segment 有 words (字级时间戳),每个字单独一个 cue,精度 0.01s。
+    否则按 segment 整体时间,加 <v Speaker> 标签。
+    """
+    out_lines = ["WEBVTT", ""]
+    idx = 1
+    for seg in segments:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        words = seg.get("words")
+        if words:
+            for w in words:
+                wt = (w.get("text") or "").strip()
+                if not wt:
+                    continue
+                start = _format_vtt_time(w["start"] + seg.get("start_time", 0.0))
+                end = _format_vtt_time(w["end"] + seg.get("start_time", 0.0))
+                out_lines.append(str(idx))
+                out_lines.append(f"{start} --> {end}")
+                if seg.get("speaker_id"):
+                    name = speaker_aliases.get(seg["speaker_id"], seg["speaker_id"])
+                    out_lines.append(f"<v {name}>{wt}</v>")
+                else:
+                    out_lines.append(wt)
+                out_lines.append("")
+                idx += 1
+        else:
+            start = _format_vtt_time(seg["start_time"])
+            end = _format_vtt_time(seg["end_time"])
+            out_lines.append(str(idx))
+            out_lines.append(f"{start} --> {end}")
+            if seg.get("speaker_id"):
+                name = speaker_aliases.get(seg["speaker_id"], seg["speaker_id"])
+                out_lines.append(f"<v {name}>{text}</v>")
+            else:
+                out_lines.append(text)
+            out_lines.append("")
+            idx += 1
+    return "\n".join(out_lines)
+
+
+def _format_mm_ss(seconds: float) -> str:
+    """MM:SS 格式（Markdown 时间戳用）"""
+    m, s = divmod(int(seconds), 60)
+    return f"{m:02d}:{s:02d}"
+
+
+def export_markdown(
+    segments: Iterable[dict],
+    speaker_aliases: dict,
+    title: str,
+    duration_sec: float,
+    speaker_count: int,
+) -> str:
+    """Markdown 格式：按说话人分组"""
+    lines = [
+        f"# {title or '未命名会议'}",
+        "",
+        f"**Duration**: {_format_mm_ss(duration_sec)}  ",
+        f"**Speakers**: {speaker_count}",
+        "",
+        "---",
+        "",
+    ]
+    # 按说话人分组，保持时间顺序
+    groups: dict[str | None, list[dict]] = {}
+    for seg in segments:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        spk = seg.get("speaker_id")
+        groups.setdefault(spk, []).append(seg)
+
+    for spk_id, segs in groups.items():
+        if spk_id:
+            name = speaker_aliases.get(spk_id, spk_id)
+            lines.append(f"## {name}")
+            lines.append("")
+        for seg in segs:
+            ts = _format_mm_ss(seg["start_time"])
+            lines.append(f"- **[{ts}]** {seg['text']}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def export_json(session: dict, segments: list[dict], speakers: list[dict]) -> str:
+    """JSON 无损导出"""
+    payload = {
+        "session": session,
+        "speakers": speakers,
+        "segments": [
+            {
+                "index": s.get("segment_index"),
+                "speaker": s.get("speaker_id"),
+                "text": s.get("text"),
+                "start_time": s.get("start_time"),
+                "end_time": s.get("end_time"),
+                "confidence": s.get("confidence"),
+            }
+            for s in segments
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+class FormatError(ValueError):
+    pass
+
+
+_MIME = {
+    "srt": "text/plain; charset=utf-8",
+    "vtt": "text/vtt; charset=utf-8",
+    "markdown": "text/markdown; charset=utf-8",
+    "json": "application/json; charset=utf-8",
+}
+
+
+def mime_type(fmt: str) -> str:
+    if fmt not in _MIME:
+        raise FormatError(f"不支持的格式: {fmt}")
+    return _MIME[fmt]
+
+
+def export(fmt: str, **kwargs) -> str:
+    if fmt == "srt":
+        return export_srt(kwargs["segments"], kwargs["speaker_aliases"])
+    if fmt == "vtt":
+        return export_vtt(kwargs["segments"], kwargs["speaker_aliases"])
+    if fmt == "markdown":
+        return export_markdown(
+            segments=kwargs["segments"],
+            speaker_aliases=kwargs["speaker_aliases"],
+            title=kwargs.get("title", ""),
+            duration_sec=kwargs.get("duration_sec", 0),
+            speaker_count=kwargs.get("speaker_count", 0),
+        )
+    if fmt == "json":
+        return export_json(
+            session=kwargs["session"],
+            segments=kwargs["segments"],
+            speakers=kwargs["speakers"],
+        )
+    raise FormatError(f"不支持的格式: {fmt}")
+
+
+def export_meeting(detail: dict, fmt: str) -> str:
+    """Export the current product meeting shape through one canonical path."""
+    if fmt == "json":
+        return json.dumps(detail, ensure_ascii=False, indent=2)
+
+    meeting = detail["meeting"]
+    segments = detail.get("segments", [])
+
+    from app.services.speaker_identity import speaker_display_name
+
+    def speaker(segment: dict) -> str:
+        # speaker 名取自 people.name(用户输入),无字符集限制。换行/控制符会
+        # 破坏 VTT cue(<v NAME> 的 NAME 含 > 提前闭合、换行截断 cue body)和
+        # SRT 块结构。统一去换行/控制符,VTT 额外去掉尖括号。
+        name = speaker_display_name(segment)
+        name = "".join(ch for ch in str(name) if ch not in "\r\n\t")
+        if fmt == "vtt":
+            name = name.replace(">", "")
+        return name
+
+    if fmt == "srt":
+        blocks = [
+            f"{index}\n{_format_srt_time(item['start_time'])} --> "
+            f"{_format_srt_time(item['end_time'])}\n[{speaker(item)}] {item['text']}"
+            for index, item in enumerate(segments, 1)
+            if str(item.get("text") or "").strip()
+        ]
+        return "\n\n".join(blocks)
+    if fmt == "vtt":
+        blocks = [
+            f"{_format_vtt_time(item['start_time'])} --> "
+            f"{_format_vtt_time(item['end_time'])}\n<v {speaker(item)}>{item['text']}"
+            for item in segments
+            if str(item.get("text") or "").strip()
+        ]
+        return "WEBVTT\n\n" + "\n\n".join(blocks)
+    if fmt == "markdown":
+        lines = [f"# {meeting['title']}", ""]
+        for item in segments:
+            if str(item.get("text") or "").strip():
+                lines.append(
+                    f"- **{_format_vtt_time(item['start_time'])} · {speaker(item)}**  \n"
+                    f"  {item['text']}"
+                )
+        return "\n".join(lines)
+    raise FormatError(f"不支持的格式: {fmt}")

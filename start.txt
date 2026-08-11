@@ -1,0 +1,3 @@
+D:
+cd D:\BaiduNetdiskDownload\matrix-live-diarizer-main\matrix-live-diarizer-main
+.\.venv-rocm-win\Scripts\python.exe main.py

@@ -1,0 +1,56 @@
+{
+  "plugins": {
+    "faster_whisper_large_v3": {
+      "name": "faster-whisper large-v3",
+      "model": "large-v3",
+      "description": "Whisper large-v3 的 CTranslate2 本地推理示例，适合多语言批量转写测试。",
+      "description_en": "Local CTranslate2 Whisper large-v3 example for multilingual batch ASR testing.",
+      "languages": "中文/英语/多语言",
+      "languages_en": "Chinese / English / multilingual",
+      "supports_streaming": false,
+      "supports_words": true,
+      "required_python_modules": ["faster_whisper"],
+      "required_files": ["scripts/asr_plugins/faster_whisper_cli.py"],
+      "timestamp_granularity": "word_optional",
+      "sample_rate": 16000,
+      "language": "zh",
+      "timeout_sec": 600,
+      "command": [
+        "{python}",
+        "scripts/asr_plugins/faster_whisper_cli.py",
+        "--audio",
+        "{audio}",
+        "--model",
+        "large-v3",
+        "--device",
+        "{device}",
+        "--language",
+        "{language}",
+        "--word-timestamps",
+        "--vad-filter"
+      ]
+    },
+    "local_command_template": {
+      "enabled": false,
+      "name": "Local command template",
+      "model": "your/local/model/path",
+      "description": "把 command 换成你的本地 ASR 脚本；stdout 输出 JSON 或纯文本。",
+      "languages": "自定义",
+      "supports_streaming": false,
+      "supports_words": false,
+      "sample_rate": 16000,
+      "language": "zh",
+      "timeout_sec": 300,
+      "command": [
+        "{python}",
+        "path/to/your_asr_cli.py",
+        "--audio",
+        "{audio}",
+        "--device",
+        "{device}",
+        "--language",
+        "{language}"
+      ]
+    }
+  }
+}

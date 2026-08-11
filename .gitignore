@@ -1,0 +1,99 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+TODO.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Model files (large)
+models/
+*.pth
+*.bin
+*.pt
+*.onnx
+
+# Audio files (optional)
+*.wav
+*.mp3
+*.flac
+
+# Uploads
+uploads/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+CLAUDE.md
+
+# Local config
+.env
+.env.local
+
+# iFlow
+.agents/
+.iflow/
+docs/superpowers/
+docs/plans/
+docs/specs/
+docs/QA_REPORT.md
+docs/PRODUCT_STRATEGY.md
+docs/adr/
+tests/**/*.md
+skills-lock.json
+AGENTS.md
+# 本地数据
+data/
+.storage/
+engine/speaker/speaker_db/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+PR_DESCRIPTION.md
+
+# 工具产物
+graphify-out/
+
+# 个人规则文档(和开源项目无关)
+.githooks/
+.gitmessage
+docs/CONTRIBUTING.md
+docs/SELF_PROMO_*.md
+
+.env
+.env.*
+*.bak

@@ -1,0 +1,88 @@
+# Web 框架
+fastapi>=0.115.0,<1.0.0
+uvicorn>=0.23.0,<1.0.0
+python-multipart>=0.0.9,<1.0.0
+# httpx: LLM gateway (app/services/llm_gateway.py) 的运行时 HTTP 客户端,
+# 必须在主依赖里(之前只在 requirements-dev.txt,生产装 requirements.txt
+# 会缺失导致 import 失败)。fastapi 不强制传递 httpx(TestClient 才需要)。
+httpx>=0.27.0,<1.0.0
+
+# 复现性说明(L7):本文件用 major 版本上界(如 <1.0.0)做软约束,
+# 兼容未来 patch/minor 升级。需要逐次版本锁定时,用
+#   pip install pip-tools && pip-compile requirements.txt -o requirements.lock
+# 生成 lock,再 `pip install -r requirements.lock` 安装。
+# 本仓库不提交 lock 以避免把特定平台/Python 的解析结果固化进来。
+
+# 深度学习
+# Torch 二进制组件必须按官方版本矩阵成套安装，不能使用彼此独立的范围。
+# CUDA / ROCm 用户应先按官方命令安装对应 GPU wheel，再装本文件。
+torch==2.11.0
+torchaudio==2.11.0
+torchvision==0.26.0
+# transformers: <5 范围内最新版仍有已知 CVE(PYSEC-2026-2289 等,from_pretrained
+# 加载恶意 config.json 可 RCE)。升级到 >=5.5 会破坏 Qwen3-ASR/Speaker 的
+# from_pretrained 加载(功能不变约束下不升级)。本地优先模型下触发需本地缓存
+# 投毒,缓解:asr_engine 传固定 revision pin(防 main 被篡改)+ 限制 models/ 可写。
+transformers>=4.30.0,<5
+
+# transformers 间接依赖(隐式,不写会报 import error)
+huggingface-hub>=0.23.0,<1.0.0
+tokenizers>=0.19.0,<1.0.0
+safetensors>=0.4.0,<1.0.0
+accelerate>=0.30.0,<2.0.0
+packaging>=23.0,<26.0
+pyyaml>=6.0.0,<7.0.0
+
+# ASR 模型
+modelscope>=1.10.0,<2.0.0
+qwen-asr>=0.0.6,<0.1.0
+
+# 新增 ASR 引擎依赖:
+#   ASR_ENGINE=sensevoice / paraformer / paraformer_streaming
+# 注意: FunASR 当前在 Windows/Python 3.13 会因 editdistance 无预编译 wheel 而安装失败。
+#       请使用 Python 3.10-3.12 环境安装本依赖后启用这些 ASR。
+funasr>=1.2.0,<2.0.0; python_version >= "3.10" and python_version < "3.13"
+
+# 声纹向量库
+chromadb>=0.6.3,<0.7.0
+# Chroma 0.6 使用旧版 positional capture API；PostHog 3+ 已移除该接口。
+posthog>=2.4.0,<3.0.0
+
+# 音频处理
+librosa>=0.10.0,<1.0.0
+soundfile>=0.12.0,<1.0.0
+numpy>=1.24.0,<3.0.0
+scipy>=1.10.0,<2.0.0
+
+# 数据模型
+pydantic>=2.0.0,<3.0.0
+
+# 鉴权
+PyJWT>=2.8.0,<3.0.0
+werkzeug>=3.0.0,<4.0.0
+# 部分鉴权/模型依赖会间接安装 cryptography；设置安全下限，避免解析到已知漏洞版本。
+cryptography>=48.0.1,<49.0.0
+
+# 配置管理
+python-dotenv>=1.0.0,<2.0.0
+
+# modelscope 隐式依赖
+setuptools>=68.0.0,<81     # pkg_resources 在 81+ 版本移除
+addict>=2.4.0,<3.0.0
+simplejson>=3.19.0,<4.0.0
+sortedcontainers>=2.4.0,<3.0.0
+
+# soundfile 与 cryptography 的隐式依赖
+cffi>=2.0.0,<3.0.0
+
+# 摘要 (TextRank 兜底) — LLM 不可用时本地提取
+summa==1.2.0
+
+# 离线高准确度说话人识别 (pyannote Community-1)
+# 用于: 上传文件 ?diarization=pyannote (DER 随会议数据集和录音条件变化)
+# 需要 HF_TOKEN 环境变量 + 接受 Community-1 模型条款。
+# 本项目向 pyannote 传入内存 waveform，不强制依赖 TorchCodec/FFmpeg；
+# FFmpeg 仍建议安装，用于 librosa/soundfile 不能直接读取的压缩格式。
+# 若自行安装 TorchCodec，必须按其官方兼容表匹配 Torch 与 FFmpeg。
+# 会议模式未配置 HF_TOKEN 时会保留匿名文稿并报告 diarization unavailable
+pyannote.audio>=4.0.4,<5.0.0
