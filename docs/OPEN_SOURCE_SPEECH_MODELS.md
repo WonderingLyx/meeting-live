@@ -22,13 +22,14 @@
 
 | 优先级 | 项目 / 模型 | 当前 star | 适合场景 | 本项目接入方式 | 注意点 |
 | --- | --- | ---: | --- | --- | --- |
-| 1 | [3D-Speaker](https://github.com/modelscope/3D-Speaker) CAM++ | 3,096 | 中文声纹、实时说话人匹配 | 已内置 `campplus` | 当前最适合作默认声纹模型 |
-| 2 | [3D-Speaker](https://github.com/modelscope/3D-Speaker) ERes2NetV2 | 3,096 | 更高精度的中文声纹 embedding | 已内置 `eres2net` | 离线或更强机器优先测 |
-| 3 | [WeSpeaker](https://github.com/wenet-e2e/wespeaker) | 1,378 | 声纹验证、说话人识别、中文生态 | 已内置/可扩展 `wespeaker` | 值得作为第三个中文声纹基线 |
-| 4 | [SpeechBrain](https://github.com/speechbrain/speechbrain) ECAPA-TDNN | 11,745 | 通用 speaker verification 基线 | 后续用声纹插件或独立包装脚本接入 | VoxCeleb 偏英文/公开视频，中文会议要实测 |
-| 5 | [pyannote-audio](https://github.com/pyannote/pyannote-audio) embedding / diarization | 10,403 | 完整说话人分离、分段、embedding | 已有 pyannote 离线路径，可继续增强 | HF gated 模型需要授权；AMD Windows ROCm 可能遇到 MIOpen 问题 |
-| 6 | [NVIDIA NeMo Speech](https://github.com/NVIDIA-NeMo/Speech) TitaNet / diarization | 18,086 | NVIDIA CUDA 声纹/分离对照 | 命令插件或独立服务 | NVIDIA 路线，不建议作为你的 AMD Windows 主路线 |
-| 7 | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) speaker models | 14,087 | 离线 speaker identification / verification | 后续可加声纹插件 | 适合部署型验证 |
+| 1 | [3D-Speaker](https://github.com/modelscope/3D-Speaker) CAM++ | 3,098 | 中文声纹、实时说话人匹配 | 已内置 `campplus`、`campplus_cn_en` | 默认先测 `campplus`;中英混合会议测 `campplus_cn_en` |
+| 2 | [3D-Speaker](https://github.com/modelscope/3D-Speaker) ERes2Net | 3,098 | 更高精度的中文声纹 embedding | 已内置 `eres2net`、`eres2net_base`、`eres2net_large` | 离线或更强机器优先测 `eres2net_large` |
+| 3 | [3D-Speaker](https://github.com/modelscope/3D-Speaker) ECAPA-TDNN | 3,098 | 经典中文 speaker verification 基线 | 已内置 `ecapa_tdnn` | 适合和 CAM++ / ERes2Net 对照 |
+| 4 | [WeSpeaker](https://github.com/wenet-e2e/wespeaker) | 1,378 | 声纹验证、说话人识别、中文生态 | 已内置 `wespeaker` | 值得作为第三个中文声纹基线 |
+| 5 | [SpeechBrain](https://github.com/speechbrain/speechbrain) ECAPA-TDNN | 11,747 | 通用 speaker verification 基线 | 后续用声纹插件或独立包装脚本接入 | VoxCeleb 偏英文/公开视频，中文会议要实测 |
+| 6 | [pyannote-audio](https://github.com/pyannote/pyannote-audio) embedding / diarization | 10,402 | 完整说话人分离、分段、embedding | 已有 pyannote 离线路径，可继续增强 | HF gated 模型需要授权；AMD Windows ROCm 可能遇到 MIOpen 问题 |
+| 7 | [NVIDIA NeMo Speech](https://github.com/NVIDIA-NeMo/Speech) TitaNet / diarization | 18,094 | NVIDIA CUDA 声纹/分离对照 | 命令插件或独立服务 | NVIDIA 路线，不建议作为你的 AMD Windows 主路线 |
+| 8 | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) speaker models | 14,103 | 离线 speaker identification / verification | 后续可加声纹插件 | 适合部署型验证 |
 
 这里的“声纹分类”一般不是 ASR 模型直接输出人名，而是：先注册人员声音样本，模型提取 embedding，再用相似度把新语音匹配到已注册人员。多说话人“分离/分段”则是 diarization，通常需要 pyannote 或 sherpa-onnx 这类独立模块。
 
@@ -40,7 +41,7 @@
 | 本地速度 | `sensevoice`、`paraformer` | whisper.cpp、sherpa-onnx |
 | 字/词级时间戳 | `qwen3` 开启 forced aligner、faster-whisper | whisper.cpp JSON 输出 |
 | 实时字幕 | `paraformer_streaming` 当前仍按 VAD segment 调用 | sherpa-onnx streaming |
-| 说话人匹配 | `campplus` | `eres2net`、`wespeaker` |
+| 说话人匹配 | `campplus`、`campplus_cn_en` | `eres2net_large`、`ecapa_tdnn`、`wespeaker` |
 | 完整多人分离 | pyannote | sherpa-onnx diarization |
 
 ## 已记录的 star 快照

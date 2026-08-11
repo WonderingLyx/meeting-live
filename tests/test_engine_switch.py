@@ -28,7 +28,12 @@ class TestSpeakerEngineManager:
         from pathlib import Path
 
         root = Path(__file__).resolve().parents[1] / "engine" / "speaker"
-        for filename in ("campplus_engine.py", "eres2net_engine.py", "wespeaker_engine.py"):
+        for filename in (
+            "campplus_engine.py",
+            "eres2net_engine.py",
+            "modelscope_speaker_engine.py",
+            "wespeaker_engine.py",
+        ):
             source = (root / filename).read_text(encoding="utf-8")
             assert "_instance" not in source, filename
             assert "def __new__" not in source, filename
@@ -127,7 +132,10 @@ class TestSpeakerEngineManager:
         assert "current" in info
         assert "engines" in info
         assert "campplus" in info["engines"]
+        assert "campplus_cn_en" in info["engines"]
         assert "eres2net" in info["engines"]
+        assert "eres2net_large" in info["engines"]
+        assert "ecapa_tdnn" in info["engines"]
         assert "wespeaker" in info["engines"]
 
     def test_manager_engine_caching(self):

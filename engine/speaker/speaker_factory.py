@@ -24,6 +24,27 @@ ENGINE_CONFIG = {
         "person_match_threshold": 0.78,
         "person_match_margin": 0.03,
     },
+    "campplus_cn_en": {
+        "name": "CamPlus Chinese-English",
+        "model": "iic/speech_campplus_sv_zh_en_16k-common_advanced",
+        "description": "中英文会议声纹,适合普通话夹英文的会议",
+        "description_en": "Chinese-English CAM++ speaker embedding for mixed-language meetings",
+        "eer_voxceleb": "0.65%",
+        "eer_cnceleb": "6.78%",
+        "params": "7.2M",
+        "speed": "快",
+        "speed_en": "Fast",
+        "embedding_dim": 512,
+        "model_revision": os.environ.get("CAMPPLUS_CN_EN_MODEL_REVISION", "v1.0.0"),
+        "embedding_contract_version": "1",
+        "normalization": "l2",
+        "person_match_threshold": 0.78,
+        "person_match_margin": 0.03,
+        "person_auto_match_threshold": 0.88,
+        "person_auto_match_margin": 0.08,
+        "threshold_profile": (0.42, 0.52, 0.52, 0.62),
+        "recommended_for": ["chinese_meeting", "mixed_chinese_english", "realtime"],
+    },
     "eres2net": {
         "name": "ERes2NetV2",
         "model": "iic/speech_eres2netv2_sv_zh-cn_16k-common",
@@ -40,6 +61,69 @@ ENGINE_CONFIG = {
         "normalization": "l2",
         "person_match_threshold": 0.78,
         "person_match_margin": 0.03,
+    },
+    "eres2net_base": {
+        "name": "ERes2Net Base",
+        "model": "iic/speech_eres2net_base_sv_zh-cn_3dspeaker_16k",
+        "description": "3D-Speaker 中文 ERes2Net Base,速度和精度折中",
+        "description_en": "3D-Speaker Chinese ERes2Net Base, balanced speed and accuracy",
+        "eer_voxceleb": "0.98%",
+        "eer_cnceleb": "6.94%",
+        "params": "6.61M",
+        "speed": "快",
+        "speed_en": "Fast",
+        "embedding_dim": 512,
+        "model_revision": os.environ.get("ERES2NET_BASE_MODEL_REVISION", "v1.0.1"),
+        "embedding_contract_version": "1",
+        "normalization": "l2",
+        "person_match_threshold": 0.78,
+        "person_match_margin": 0.03,
+        "person_auto_match_threshold": 0.88,
+        "person_auto_match_margin": 0.08,
+        "threshold_profile": (0.40, 0.50, 0.50, 0.60),
+        "recommended_for": ["chinese_meeting", "baseline", "realtime"],
+    },
+    "eres2net_large": {
+        "name": "ERes2Net Large",
+        "model": "iic/speech_eres2net_large_sv_zh-cn_3dspeaker_16k",
+        "description": "3D-Speaker 中文 ERes2Net Large,偏离线高精度对照",
+        "description_en": "3D-Speaker Chinese ERes2Net Large for higher-quality offline comparison",
+        "eer_voxceleb": "0.52%",
+        "eer_cnceleb": "5.62%",
+        "params": "22.46M",
+        "speed": "中等",
+        "speed_en": "Medium",
+        "embedding_dim": 512,
+        "model_revision": os.environ.get("ERES2NET_LARGE_MODEL_REVISION", "v1.0.0"),
+        "embedding_contract_version": "1",
+        "normalization": "l2",
+        "person_match_threshold": 0.80,
+        "person_match_margin": 0.04,
+        "person_auto_match_threshold": 0.90,
+        "person_auto_match_margin": 0.09,
+        "threshold_profile": (0.38, 0.48, 0.48, 0.58),
+        "recommended_for": ["chinese_high_quality", "offline"],
+    },
+    "ecapa_tdnn": {
+        "name": "ECAPA-TDNN",
+        "model": "iic/speech_ecapa-tdnn_sv_zh-cn_3dspeaker_16k",
+        "description": "经典 ECAPA-TDNN 中文声纹基线,适合和 3D-Speaker 系列对照",
+        "description_en": "Classic Chinese ECAPA-TDNN speaker embedding baseline",
+        "eer_voxceleb": "0.86%",
+        "eer_cnceleb": "7.45%",
+        "params": "20.8M",
+        "speed": "中等",
+        "speed_en": "Medium",
+        "embedding_dim": 192,
+        "model_revision": os.environ.get("ECAPA_TDNN_MODEL_REVISION", "v1.0.0"),
+        "embedding_contract_version": "1",
+        "normalization": "l2",
+        "person_match_threshold": 0.78,
+        "person_match_margin": 0.03,
+        "person_auto_match_threshold": 0.88,
+        "person_auto_match_margin": 0.08,
+        "threshold_profile": (0.42, 0.52, 0.52, 0.62),
+        "recommended_for": ["chinese_baseline", "offline"],
     },
     "wespeaker": {
         "name": "ResNet34",
@@ -69,10 +153,26 @@ VALID_ENGINE_TYPES = set(ENGINE_CONFIG.keys())
 _ENGINE_ALIASES = {
     "campplus": "campplus",
     "camplus": "campplus",
+    "camppluscnen": "campplus_cn_en",
+    "camppluszhen": "campplus_cn_en",
+    "campplusadvanced": "campplus_cn_en",
+    "campluscnen": "campplus_cn_en",
     "eres2net": "eres2net",
     "eres2netv2": "eres2net",
+    "eres2netbase": "eres2net_base",
+    "eres2netlarge": "eres2net_large",
+    "ecapa": "ecapa_tdnn",
+    "ecapatdnn": "ecapa_tdnn",
     "wespeaker": "wespeaker",
     "resnet34": "wespeaker",
+}
+
+
+GENERIC_MODELSCOPE_ENGINE_TYPES = {
+    "campplus_cn_en",
+    "eres2net_base",
+    "eres2net_large",
+    "ecapa_tdnn",
 }
 
 
@@ -207,6 +307,9 @@ class SpeakerEngineManager:
         elif engine_type == "wespeaker":
             from .wespeaker_engine import WespeakerEngine
             engine = WespeakerEngine()
+        elif engine_type in GENERIC_MODELSCOPE_ENGINE_TYPES:
+            from .modelscope_speaker_engine import ModelScopeSpeakerEngine
+            engine = ModelScopeSpeakerEngine(engine_type)
         else:
             from .campplus_engine import CamPlusEngine
             engine = CamPlusEngine()
@@ -226,7 +329,8 @@ class SpeakerEngineManager:
     
     def switch_engine(self, engine_type: str) -> Dict[str, Any]:
         """切换引擎"""
-        engine_type = engine_type.lower().strip()
+        raw_engine_type = str(engine_type or "").lower().strip()
+        engine_type = engine_type_for(raw_engine_type) or raw_engine_type.replace("-", "_")
         previous_type = self._current_type
         previous_dim = ENGINE_CONFIG.get(previous_type, {}).get("embedding_dim", 0)
         previous_model_id = embedding_model_id(previous_type)
@@ -331,7 +435,12 @@ class SpeakerEngineManager:
 
 def _configured_engine_type() -> str:
     """读取启动时配置的默认声纹引擎。"""
-    return os.environ.get("SPEAKER_ENGINE", "campplus").lower()
+    raw = os.environ.get("SPEAKER_ENGINE", "campplus").lower().strip()
+    engine_type = engine_type_for(raw) or raw.replace("-", "_")
+    if engine_type in VALID_ENGINE_TYPES:
+        return engine_type
+    logger.warning("Invalid SPEAKER_ENGINE=%r, fallback to campplus", raw)
+    return "campplus"
 
 
 def get_speaker_engine():

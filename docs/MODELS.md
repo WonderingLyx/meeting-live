@@ -28,12 +28,13 @@
 
 > 能力边界：word timestamps / 字级时间戳当前只在 Qwen3-ASR + `ASR_WORD_TIMESTAMPS=true` 路径可用。说话人识别不是 Qwen3-ASR 自带能力,由声纹引擎或上传离线 pyannote 负责。
 
-### 声纹: CamPlus / ERes2NetV2 / ResNet34 (Wespeaker)
-- **来源**: ModelScope `damo/speech_campplus_sv_zh-cn_16k-common` 等
-- **大小**: 7-18M 参数(都 < 100MB)
+### 声纹: 3D-Speaker / ModelScope Speaker Verification
+- **来源**: ModelScope `damo/speech_campplus_sv_zh-cn_16k-common`、`iic/speech_eres2net_large_sv_zh-cn_3dspeaker_16k` 等
+- **大小**: 6-23M 参数级别,首次切换到未缓存模型时自动下载
 - **能力**: 说话人识别(谁在说话)、声纹库累积、cosine 距离比对
-- **切换**: `SPEAKER_ENGINE=campplus|eres2net|wespeaker` 运行时可切
-- **embedding_dim**: CamPlus/ERes2Net=192,Wespeaker=256(切引擎不兼容老数据)
+- **切换**: `SPEAKER_ENGINE=campplus|campplus_cn_en|eres2net|eres2net_base|eres2net_large|ecapa_tdnn|wespeaker` 或设置页运行时可切
+- **推荐顺序**: 中文会议先测 `campplus`,中英混合测 `campplus_cn_en`,离线质量对照测 `eres2net_large`,基线对照测 `ecapa_tdnn` / `wespeaker`
+- **embedding_dim / model_id**: 不同模型的 embedding 空间不同。项目会把模型 id、revision、维度和归一化方式写入 voice sample,切引擎后旧样本保留但不会跨模型误匹配。
 
 ### ASR: SenseVoice / Paraformer / Paraformer Streaming
 - **来源**: ModelScope / FunASR

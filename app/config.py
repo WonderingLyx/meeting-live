@@ -170,7 +170,7 @@ def _upload_max_file_size() -> int:
 
 @dataclass
 class SpeakerConfig:
-    """声纹引擎: campplus / eres2net / wespeaker"""
+    """声纹引擎: campplus / campplus_cn_en / eres2net / eres2net_base / eres2net_large / ecapa_tdnn / wespeaker"""
     engine_type: str = "campplus"
     # Legacy fallback kept for integrations that have not selected an engine.
     person_match_threshold: float = 0.78
@@ -193,7 +193,7 @@ class SpeakerConfig:
 
     def person_match_policy(self, model_identifier: object) -> tuple[float, float]:
         """Return an engine-specific acceptance threshold and ambiguity margin."""
-        from engine.speaker.speaker_factory import engine_type_for
+        from engine.speaker.speaker_factory import ENGINE_CONFIG, engine_type_for
 
         engine_type = engine_type_for(model_identifier)
         if engine_type == "campplus":
@@ -202,11 +202,17 @@ class SpeakerConfig:
             return self.eres2net_match_threshold, self.eres2net_match_margin
         if engine_type == "wespeaker":
             return self.wespeaker_match_threshold, self.wespeaker_match_margin
+        info = ENGINE_CONFIG.get(engine_type or "", {})
+        if info:
+            return (
+                float(info.get("person_match_threshold", self.person_match_threshold)),
+                float(info.get("person_match_margin", self.person_match_margin)),
+            )
         return self.person_match_threshold, self.person_match_margin
 
     def person_auto_match_policy(self, model_identifier: object) -> tuple[float, float]:
         """Return the stricter policy required to display a name automatically."""
-        from engine.speaker.speaker_factory import engine_type_for
+        from engine.speaker.speaker_factory import ENGINE_CONFIG, engine_type_for
 
         engine_type = engine_type_for(model_identifier)
         if engine_type == "campplus":
@@ -225,9 +231,10 @@ class SpeakerConfig:
                 self.wespeaker_auto_match_margin,
             )
         else:
+            info = ENGINE_CONFIG.get(engine_type or "", {})
             configured = (
-                self.person_auto_match_threshold,
-                self.person_auto_match_margin,
+                float(info.get("person_auto_match_threshold", self.person_auto_match_threshold)),
+                float(info.get("person_auto_match_margin", self.person_auto_match_margin)),
             )
         suggestion = self.person_match_policy(model_identifier)
         return max(configured[0], suggestion[0]), max(configured[1], suggestion[1])

@@ -1,6 +1,7 @@
 """声纹实时聚类存储策略回归测试。"""
 
 from pathlib import Path
+import numpy as np
 
 from engine.speaker.speaker_factory import (
     ENGINE_CONFIG,
@@ -16,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENGINE_FILES = (
     ROOT / "engine" / "speaker" / "campplus_engine.py",
     ROOT / "engine" / "speaker" / "eres2net_engine.py",
+    ROOT / "engine" / "speaker" / "modelscope_speaker_engine.py",
     ROOT / "engine" / "speaker" / "wespeaker_engine.py",
 )
 
@@ -47,6 +49,60 @@ def test_legacy_model_name_is_resolved_only_at_compatible_dimension() -> None:
     assert resolve_embedding_model_id("CamPlus", 192) == embedding_model_id("campplus")
     assert resolve_embedding_model_id("CamPlus", 256) is None
     assert resolve_embedding_model_id(embedding_model_id("campplus"), 256) is None
+
+
+def test_added_speaker_engines_have_isolated_model_ids() -> None:
+    from engine.speaker.speaker_factory import engine_type_for
+
+    assert engine_type_for("campplus-cn-en") == "campplus_cn_en"
+    assert engine_type_for("eres2net-large") == "eres2net_large"
+    assert engine_type_for("ecapa-tdnn") == "ecapa_tdnn"
+
+    model_ids = {
+        embedding_model_id("campplus_cn_en"),
+        embedding_model_id("eres2net_base"),
+        embedding_model_id("eres2net_large"),
+        embedding_model_id("ecapa_tdnn"),
+    }
+    assert len(model_ids) == 4
+    assert all("modelscope:" in item for item in model_ids)
+    assert any("speech_eres2net_large_sv_zh-cn_3dspeaker_16k" in item for item in model_ids)
+
+
+def test_generic_modelscope_speaker_engine_uses_configured_model(monkeypatch, tmp_path) -> None:
+    from engine.speaker import modelscope_speaker_engine as mod
+
+    calls = []
+
+    class FakeLoadedModel:
+        def eval(self):
+            return None
+
+    class FakeModel:
+        @staticmethod
+        def from_pretrained(local, device="cpu"):
+            calls.append((local, device))
+            return FakeLoadedModel()
+
+    class FakeChroma:
+        def get_or_create_collection(self, **kwargs):
+            return kwargs
+
+    monkeypatch.setattr(mod, "Model", FakeModel)
+    monkeypatch.setattr(
+        "app.services.model_resolver.resolve_modelscope",
+        lambda model_id, category, name, revision=None: str(tmp_path / name),
+    )
+    monkeypatch.setattr(mod.chromadb, "EphemeralClient", lambda settings=None: FakeChroma())
+
+    engine = mod.ModelScopeSpeakerEngine("eres2net_large")
+
+    assert engine.engine_type == "eres2net_large"
+    assert calls == [(str(tmp_path / "eres2net_large"), "cpu")]
+    vector = mod.ModelScopeSpeakerEngine._extract_embedding_array(
+        {"spk_embedding": np.array([[1.0, 2.0, 3.0]], dtype=np.float32)}
+    )
+    assert vector.tolist() == [1.0, 2.0, 3.0]
 
 
 def test_repository_never_returns_same_dimension_from_another_model(tmp_path) -> None:
@@ -94,3 +150,5 @@ def test_each_engine_has_an_independent_identity_match_policy(monkeypatch) -> No
     assert settings.person_match_policy("ERes2NetV2") == (0.75, 0.02)
     assert settings.person_auto_match_policy("CamPlus") == (0.90, 0.09)
     assert settings.person_auto_match_policy("ERes2NetV2") == (0.75, 0.02)
+    assert settings.person_match_policy("eres2net_large") == (0.80, 0.04)
+    assert settings.person_auto_match_policy("eres2net_large") == (0.90, 0.09)

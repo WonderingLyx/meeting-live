@@ -45,7 +45,7 @@ const asrTestFile = ref<File | null>(null)
 const asrTestResult = ref<AsrTestResponse | null>(null)
 
 const engineList = computed(() => {
-  const order = ['campplus', 'eres2net', 'wespeaker']
+  const order = ['campplus', 'campplus_cn_en', 'eres2net_large', 'eres2net', 'eres2net_base', 'ecapa_tdnn', 'wespeaker']
   const e = engines.value
   return [...order.filter((k) => e[k]), ...Object.keys(e).filter((k) => !order.includes(k))]
 })
