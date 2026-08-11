@@ -499,17 +499,6 @@ function Invoke-RetryingDownload($Url, $Destination, [int64]$ExpectedLength) {
     throw "Download failed after retries: $Url. Last error: $lastError"
 }
 
-function Test-ZipArchive($Path) {
-    try {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-        $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
-        $zip.Dispose()
-        return $true
-    } catch {
-        return $false
-    }
-}
-
 function Test-ArtifactFile($Path, [int64]$ExpectedLength) {
     if (-not (Test-Path -LiteralPath $Path)) {
         return $false
@@ -521,9 +510,8 @@ function Test-ArtifactFile($Path, [int64]$ExpectedLength) {
     if ($ExpectedLength -gt 0 -and $item.Length -ne $ExpectedLength) {
         return $false
     }
-    if ($Path.EndsWith(".whl", [System.StringComparison]::OrdinalIgnoreCase)) {
-        return (Test-ZipArchive $Path)
-    }
+    # Let pip validate wheel internals. PowerShell/.NET ZIP checks can falsely fail on
+    # very large ROCm wheel files and waste long downloads.
     return $true
 }
 
