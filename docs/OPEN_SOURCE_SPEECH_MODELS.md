@@ -6,7 +6,7 @@
 
 | 优先级 | 项目 / 模型 | 当前 star | 适合场景 | 本项目接入方式 | AMD Windows 注意点 |
 | --- | --- | ---: | --- | --- | --- |
-| 1 | [FunASR](https://github.com/modelscope/FunASR) / SenseVoice / Paraformer | 19,763 | 中文会议、访谈、普通话优先 | 已内置 `sensevoice`、`paraformer`、`paraformer_streaming`；也可用插件接 FunASR CLI | 中文生态最好，先测 CPU 稳定性，再测 ROCm |
+| 1 | [FunASR](https://github.com/modelscope/FunASR) / SenseVoice / Paraformer | 19,763 | 中文会议、访谈、普通话优先 | 已内置 `sensevoice_zh`、`sensevoice`、`paraformer`、`paraformer_full`、`paraformer_large`、`paraformer_spk`、`paraformer_streaming`；也可用插件接 FunASR CLI | 中文生态最好，先测 CPU 稳定性，再测 ROCm |
 | 2 | [Qwen3-ASR-0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) | HF 模型页 | 高质量中文/多语种离线转写 | 已内置 `qwen3` | 质量基线，但在 AMD Windows ROCm 上可能遇到算子/MIOpen 兼容问题 |
 | 3 | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) + Whisper large-v3/turbo | 24,847 | 多语种对照、word timestamps、成熟社区 | 已提供 `scripts/asr_plugins/faster_whisper_cli.py` 插件包装 | GPU 主要面向 CUDA/CTranslate2；AMD Windows 先按 CPU 测 |
 | 4 | [whisper.cpp](https://github.com/ggml-org/whisper.cpp) | 52,799 | 轻量 CLI、本地二进制、无 Python 依赖 | 用 `plugin:<id>` 接 whisper.cpp 命令或包装脚本 | CPU 很方便；Vulkan/其他后端可单独实验 |

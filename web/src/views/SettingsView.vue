@@ -51,7 +51,7 @@ const engineList = computed(() => {
 })
 
 const asrEngines = computed<Record<string, AsrInfo>>(() => models.value?.asr_engines?.engines || {})
-const currentAsr = computed(() => models.value?.asr_engines?.current || models.value?.asr?.type || 'qwen3')
+const currentAsr = computed(() => models.value?.asr_engines?.current || models.value?.asr?.type || 'sensevoice_zh')
 const cachedAsr = computed(() => new Set(models.value?.asr_engines?.cached || [currentAsr.value]))
 const backendAsrSwitching = computed(() => !!models.value?.asr_engines?.switching)
 const pendingAsr = computed(() => switchingAsr.value || models.value?.asr_engines?.pending || null)
@@ -85,7 +85,7 @@ const asrGpuNames = computed(() => {
   return devices.map((d) => d.name).filter(Boolean).join(' / ')
 })
 const asrList = computed(() => {
-  const order = ['qwen3', 'sensevoice', 'paraformer', 'paraformer_streaming']
+  const order = ['sensevoice_zh', 'paraformer_full', 'paraformer', 'qwen3', 'paraformer_large', 'sensevoice', 'paraformer_spk', 'paraformer_streaming']
   const e = asrEngines.value
   return [...order.filter((k) => e[k]), ...Object.keys(e).filter((k) => !order.includes(k))]
 })

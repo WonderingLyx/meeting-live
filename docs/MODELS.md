@@ -42,11 +42,16 @@
 - **行为**: 新 ASR 下载/加载完成前继续使用旧 ASR;加载失败不会影响当前引擎
 - **能力来源**: 后端 `/v1/models` 返回,可通过 `ASR_CAPABILITIES_JSON` / `ASR_CAPABILITIES_FILE` 配置覆盖
 - **适用**:
+  - SenseVoice Chinese (`sensevoice_zh`): 中文固定语言快速转写,中文会议优先测试
   - SenseVoice-Small: 多语种上传转写,模型更轻
   - Paraformer: 中文会议/访谈离线转写
+  - Paraformer Full (`paraformer_full`): Paraformer + VAD + 标点,适合较长中文会议
+  - Paraformer Large (`paraformer_large`): ModelScope Paraformer Large,适合离线质量对照
+  - Paraformer Speaker Tags (`paraformer_spk`): FunASR 内部 speaker 标签,只作对照
   - Paraformer Streaming: 低延迟实时字幕
 - **能力差异**:
   - FunASR 系列当前按段级结果接入,不提供 Qwen3 ForcedAligner 的 word timestamps
+  - `paraformer_spk` 的 speaker 标签来自 FunASR 当前音频块,不替代项目的 pyannote 分离或注册声纹身份识别
   - Paraformer Streaming 表示模型适合流式/低延迟场景,但当前服务端展示不是 token-level 真流式逐 token 输出
   - 切换 ASR 只改变转写模型,不会改变说话人识别算法;实时说话人由 Speaker Engine 完成,上传离线 diarization 可走 pyannote
 

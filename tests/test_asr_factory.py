@@ -17,10 +17,11 @@ def reset_asr_manager_state():
     ASREngineManager.reset()
 
 
-def test_asr_config_engine_default():
+def test_asr_config_engine_default(monkeypatch):
     from app.config import AudioConfig
+    monkeypatch.delenv("ASR_ENGINE", raising=False)
     cfg = AudioConfig.from_env()
-    assert cfg.asr_engine == "qwen3"
+    assert cfg.asr_engine == "sensevoice_zh"
 
 
 def test_asr_config_engine_from_env(monkeypatch):
@@ -30,7 +31,7 @@ def test_asr_config_engine_from_env(monkeypatch):
     assert cfg.asr_engine == "sensevoice"
 
 
-def test_asr_factory_default_uses_qwen_module(monkeypatch):
+def test_asr_factory_qwen_uses_qwen_module(monkeypatch):
     fake_asr = types.ModuleType("engine.asr_engine")
     expected = MagicMock()
     fake_asr.ASREngine = MagicMock(return_value=expected)
@@ -45,20 +46,29 @@ def test_asr_factory_aliases():
     from engine.asr.factory import get_asr_engine_info
     assert get_asr_engine_info("qwen")["type"] == "qwen3"
     assert get_asr_engine_info("sensevoice-small")["type"] == "sensevoice"
-    assert get_asr_engine_info("paraformer-large")["type"] == "paraformer"
+    assert get_asr_engine_info("sensevoice-cn")["type"] == "sensevoice_zh"
+    assert get_asr_engine_info("paraformer-punc")["type"] == "paraformer_full"
+    assert get_asr_engine_info("paraformer-large")["type"] == "paraformer_large"
+    assert get_asr_engine_info("paraformer-speaker")["type"] == "paraformer_spk"
     assert get_asr_engine_info("funasr-streaming")["type"] == "paraformer_streaming"
 
 
-def test_get_all_asr_engines_shape():
+def test_get_all_asr_engines_shape(monkeypatch):
+    from app.config import config
     from engine.asr.factory import ASREngineManager
+    monkeypatch.setattr(config.audio, "asr_engine", "sensevoice_zh")
     ASREngineManager.reset()
 
     from engine.asr import get_all_asr_engines
     data = get_all_asr_engines()
-    assert data["current"] == "qwen3"
+    assert data["current"] == "sensevoice_zh"
     assert "qwen3" in data["engines"]
     assert "sensevoice" in data["engines"]
+    assert "sensevoice_zh" in data["engines"]
     assert "paraformer" in data["engines"]
+    assert "paraformer_full" in data["engines"]
+    assert "paraformer_large" in data["engines"]
+    assert "paraformer_spk" in data["engines"]
     assert "paraformer_streaming" in data["engines"]
     assert "sherpa_onnx" not in data["engines"]
     assert data["switching"] is False
@@ -151,6 +161,7 @@ def test_asr_engine_capabilities_are_explicit():
 
     qwen = get_asr_engine_info("qwen3")
     streaming = get_asr_engine_info("paraformer_streaming")
+    spk = get_asr_engine_info("paraformer_spk")
 
     assert qwen["capabilities"]["word_timestamps"] is True
     assert qwen["capabilities"]["speaker_diarization"] is False
@@ -161,6 +172,41 @@ def test_asr_engine_capabilities_are_explicit():
     assert qwen["capabilities"]["timestamp_granularity"] == "word_optional"
     assert streaming["capabilities"]["native_metadata"] is True
     assert streaming["capabilities"]["timestamp_granularity"] == "dynamic"
+    assert spk["capabilities"]["speaker_diarization"] == "provider_chunk_labels"
+
+
+def test_funasr_builtin_variants_load_expected_automodel(monkeypatch):
+    calls = []
+
+    class FakeAutoModel:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+    fake_fun = types.ModuleType("funasr")
+    fake_fun.AutoModel = FakeAutoModel
+    monkeypatch.setitem(sys.modules, "funasr", fake_fun)
+    fake_utils = types.ModuleType("funasr.utils.postprocess_utils")
+    fake_utils.rich_transcription_postprocess = lambda text: text
+    monkeypatch.setitem(sys.modules, "funasr.utils.postprocess_utils", fake_utils)
+    monkeypatch.setattr(
+        "engine.asr.funasr_engine.FunASREngine._resolve_device",
+        staticmethod(lambda _requested: "cpu"),
+    )
+
+    from engine.asr.funasr_engine import FunASREngine
+
+    FunASREngine._instances.clear()
+    FunASREngine("sensevoice_zh")
+    FunASREngine("paraformer_full")
+    FunASREngine("paraformer_large")
+    FunASREngine("paraformer_spk")
+
+    assert calls[0]["model"] == "iic/SenseVoiceSmall"
+    assert calls[1]["model"] == "paraformer-zh"
+    assert calls[1]["punc_model"] == "ct-punc"
+    assert calls[2]["model"] == "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+    assert calls[2]["punc_model"] == "ct-punc"
+    assert calls[3]["spk_model"] == "cam++"
 
 
 def test_asr_engine_capabilities_can_be_overridden(monkeypatch):

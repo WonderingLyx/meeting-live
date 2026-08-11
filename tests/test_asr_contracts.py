@@ -144,9 +144,25 @@ def test_funasr_normalizes_explicit_token_timestamps_as_words():
     assert result["timestamp_granularity"] == "word"
 
 
+def test_sensevoice_zh_forces_chinese_language():
+    from engine.asr.funasr_engine import FunASREngine
+
+    engine = object.__new__(FunASREngine)
+    engine.kind = "sensevoice_zh"
+    engine._postprocess = None
+    engine.model = _FakeFunASRModel({"text": "中文测试"})
+
+    result = engine._transcribe_sync(np.zeros(16000, dtype=np.float32))
+
+    assert engine.model.kwargs["language"] == "zh"
+    assert result["language"] == "zh"
+
+
 class _FakeFunASRModel:
     def __init__(self, result):
         self.result = result
+        self.kwargs = None
 
-    def generate(self, **_kwargs):
+    def generate(self, **kwargs):
+        self.kwargs = kwargs
         return self.result

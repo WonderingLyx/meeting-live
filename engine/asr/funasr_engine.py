@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 import numpy as np
@@ -23,7 +24,7 @@ class FunASREngine:
     _instances: dict[str, "FunASREngine"] = {}
 
     def __new__(cls, kind: str = "sensevoice"):
-        key = kind.lower()
+        key = kind.lower().strip().replace("-", "_")
         if key not in cls._instances:
             inst = super().__new__(cls)
             inst.initialized = False
@@ -33,13 +34,14 @@ class FunASREngine:
     def __init__(self, kind: str = "sensevoice"):
         if self.initialized:
             return
-        self.kind = kind.lower()
+        self.kind = kind.lower().strip().replace("-", "_")
         from app.config import config
         self.config = config.audio
         self.sample_rate = config.audio.sample_rate
         self.device = self._resolve_device(config.audio.asr_device)
         self.model = None
         self._postprocess = None
+        self._model_name = self.kind
 
         try:
             self._load_model()
@@ -91,7 +93,8 @@ class FunASREngine:
                 rich_transcription_postprocess = None
             self._postprocess = rich_transcription_postprocess
 
-            if self.kind == "sensevoice":
+            if self.kind in {"sensevoice", "sensevoice_zh"}:
+                self._model_name = "iic/SenseVoiceSmall"
                 self.model = AutoModel(
                     model="iic/SenseVoiceSmall",
                     vad_model="fsmn-vad",
@@ -107,8 +110,10 @@ class FunASREngine:
                 }
                 if (_os.environ.get("ASR_FUNASR_PUNC") or "").lower() in {"1", "true", "yes", "on"}:
                     paraformer_kwargs["punc_model"] = _os.environ.get("ASR_FUNASR_PUNC_MODEL", "ct-punc")
+                self._model_name = str(paraformer_kwargs["model"])
                 self.model = AutoModel(**paraformer_kwargs)
             elif self.kind == "paraformer_full":
+                self._model_name = "paraformer-zh + fsmn-vad + ct-punc"
                 self.model = AutoModel(
                     model="paraformer-zh",
                     vad_model="fsmn-vad",
@@ -116,7 +121,27 @@ class FunASREngine:
                     vad_kwargs={"max_single_segment_time": 30000},
                     device=self.device,
                 )
+            elif self.kind == "paraformer_large":
+                self._model_name = "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+                self.model = AutoModel(
+                    model=self._model_name,
+                    vad_model="fsmn-vad",
+                    punc_model="ct-punc",
+                    vad_kwargs={"max_single_segment_time": 30000},
+                    device=self.device,
+                )
+            elif self.kind == "paraformer_spk":
+                self._model_name = "paraformer-zh + fsmn-vad + ct-punc + cam++"
+                self.model = AutoModel(
+                    model="paraformer-zh",
+                    vad_model="fsmn-vad",
+                    punc_model="ct-punc",
+                    spk_model="cam++",
+                    vad_kwargs={"max_single_segment_time": 30000},
+                    device=self.device,
+                )
             elif self.kind == "paraformer_streaming":
+                self._model_name = "paraformer-zh-streaming"
                 self.model = AutoModel(
                     model="paraformer-zh-streaming",
                     device=self.device,
@@ -169,21 +194,15 @@ class FunASREngine:
 
     def _transcribe_sync(self, audio_data: np.ndarray) -> ASRResult:
         kwargs: dict[str, Any] = {"input": audio_data.astype(np.float32)}
-        if self.kind == "sensevoice":
+        if self.kind in {"sensevoice", "sensevoice_zh"}:
             kwargs.update({
-                "language": "auto",
+                "language": "zh" if self.kind == "sensevoice_zh" else "auto",
                 "use_itn": True,
                 "batch_size_s": 60,
                 "merge_vad": True,
                 "merge_length_s": 15,
             })
-        elif self.kind == "paraformer":
-            kwargs.update({
-                "batch_size_s": 60,
-                "merge_vad": True,
-                "merge_length_s": 15,
-            })
-        else:
+        elif self.kind == "paraformer_streaming":
             kwargs.update({
                 "cache": {},
                 "is_final": True,
@@ -191,11 +210,22 @@ class FunASREngine:
                 "encoder_chunk_look_back": 4,
                 "decoder_chunk_look_back": 1,
             })
+        else:
+            kwargs.update({
+                "batch_size_s": 60,
+                "merge_vad": True,
+                "merge_length_s": 15,
+            })
+            hotwords = str(os.environ.get("ASR_FUNASR_HOTWORDS", "") or "").strip()
+            if hotwords:
+                kwargs["hotword"] = hotwords
 
         res = self.model.generate(**kwargs)
         result = self._normalize_result(res)
+        if self.kind == "sensevoice_zh" and not result.get("language"):
+            result["language"] = "zh"
         if (
-            self.kind == "sensevoice"
+            self.kind in {"sensevoice", "sensevoice_zh"}
             and self._postprocess is not None
             and not result.get("words")
             and not result.get("segments")
@@ -255,12 +285,14 @@ class FunASREngine:
                 native_items.append(preserved)
 
         metadata = {"provider": "funasr", "items": native_items} if native_items else None
+        has_speaker = any(segment.get("speaker") for segment in segments)
         return make_asr_result(
             "".join(text_parts),
             words=words or None,
             segments=segments or None,
             language=language,
             provider_metadata=metadata,
+            speaker_scope="chunk" if has_speaker else "none",
         )
 
     @classmethod

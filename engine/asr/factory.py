@@ -76,6 +76,31 @@ ASR_ENGINE_CONFIG: dict[str, dict[str, Any]] = {
             "notes_en": "No word timestamps; speaker diarization is provided by separate speaker/pyannote modules.",
         },
     },
+    "sensevoice_zh": {
+        "name": "SenseVoice-Small Chinese",
+        "model": "iic/SenseVoiceSmall",
+        "description": "SenseVoice 中文固定语言模式,适合普通话/粤语会议快速转写,避免自动语种识别抖动",
+        "description_en": "SenseVoice with Chinese language fixed, useful for Chinese meeting transcription",
+        "languages": "中文/粤语",
+        "languages_en": "Chinese / Cantonese",
+        "supports_streaming": False,
+        "supports_words": False,
+        "optional_dependency": "funasr",
+        "capabilities": {
+            "transcription": True,
+            "upload": True,
+            "realtime_segmented": True,
+            "true_streaming": False,
+            "word_timestamps": False,
+            "speaker_diarization": False,
+            "result_contract": "asr-result-v1",
+            "timestamp_granularity": "dynamic",
+            "native_metadata": True,
+            "recommended_for": ["chinese_fast_upload", "chinese_realtime"],
+            "notes": "与 SenseVoice-Small 使用同一模型,但推理时固定 language=zh,中文会议优先测试。",
+            "notes_en": "Uses the same SenseVoice-Small weights, but fixes language=zh for Chinese meetings.",
+        },
+    },
     "paraformer": {
         "name": "Paraformer",
         "model": "paraformer-zh",
@@ -99,6 +124,81 @@ ASR_ENGINE_CONFIG: dict[str, dict[str, Any]] = {
             "recommended_for": ["chinese_meeting_upload"],
             "notes": "偏中文会议/访谈;导出字幕使用 segment 级时间戳。",
             "notes_en": "Best for Chinese meeting/interview transcription; exports use segment-level timestamps.",
+        },
+    },
+    "paraformer_full": {
+        "name": "Paraformer + VAD + Punc",
+        "model": "paraformer-zh + fsmn-vad + ct-punc",
+        "description": "中文会议完整 FunASR 组合,自动断句并补标点,适合上传文件和较长访谈",
+        "description_en": "Full Chinese FunASR stack with VAD and punctuation for longer meetings",
+        "languages": "中文/英语",
+        "languages_en": "Chinese / English",
+        "supports_streaming": False,
+        "supports_words": False,
+        "optional_dependency": "funasr",
+        "capabilities": {
+            "transcription": True,
+            "upload": True,
+            "realtime_segmented": True,
+            "true_streaming": False,
+            "word_timestamps": False,
+            "speaker_diarization": False,
+            "result_contract": "asr-result-v1",
+            "timestamp_granularity": "dynamic",
+            "native_metadata": True,
+            "recommended_for": ["chinese_meeting_upload", "punctuated_transcript"],
+            "notes": "首次会下载 Paraformer、FSMN-VAD 和 CT-Punc。说话人仍由项目独立声纹/pyannote 流程处理。",
+            "notes_en": "Downloads Paraformer, FSMN-VAD, and CT-Punc on first use. Speaker ID remains separate.",
+        },
+    },
+    "paraformer_large": {
+        "name": "Paraformer Large",
+        "model": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+        "description": "ModelScope Paraformer Large 中文模型,偏离线高质量普通话转写",
+        "description_en": "ModelScope Paraformer Large Chinese model for higher-quality offline Mandarin ASR",
+        "languages": "中文/英语",
+        "languages_en": "Chinese / English",
+        "supports_streaming": False,
+        "supports_words": False,
+        "optional_dependency": "funasr",
+        "capabilities": {
+            "transcription": True,
+            "upload": True,
+            "realtime_segmented": True,
+            "true_streaming": False,
+            "word_timestamps": False,
+            "speaker_diarization": False,
+            "result_contract": "asr-result-v1",
+            "timestamp_granularity": "dynamic",
+            "native_metadata": True,
+            "recommended_for": ["chinese_high_quality_upload"],
+            "notes": "偏离线质量测试;实时场景先用 sensevoice_zh 或 paraformer_full 对照。",
+            "notes_en": "Use mainly for offline quality tests; compare with sensevoice_zh or paraformer_full for realtime.",
+        },
+    },
+    "paraformer_spk": {
+        "name": "Paraformer + Speaker Tags",
+        "model": "paraformer-zh + fsmn-vad + ct-punc + cam++",
+        "description": "FunASR 中文转写并输出模型内说话人标签,用于和项目独立说话人分离做对照",
+        "description_en": "Chinese FunASR stack with provider speaker tags for comparison with app diarization",
+        "languages": "中文/英语",
+        "languages_en": "Chinese / English",
+        "supports_streaming": False,
+        "supports_words": False,
+        "optional_dependency": "funasr",
+        "capabilities": {
+            "transcription": True,
+            "upload": True,
+            "realtime_segmented": True,
+            "true_streaming": False,
+            "word_timestamps": False,
+            "speaker_diarization": "provider_chunk_labels",
+            "result_contract": "asr-result-v1",
+            "timestamp_granularity": "dynamic",
+            "native_metadata": True,
+            "recommended_for": ["diarization_baseline", "chinese_meeting_upload"],
+            "notes": "FunASR 内部 speaker 标签按音频块产生,不替代项目的 pyannote/声纹身份识别。",
+            "notes_en": "Provider speaker tags are chunk-local and do not replace pyannote or registered speaker identity.",
         },
     },
     "paraformer_streaming": {
@@ -126,6 +226,17 @@ ASR_ENGINE_CONFIG: dict[str, dict[str, Any]] = {
             "notes_en": "The model supports streaming, but this app currently calls it on VAD segments, not token-level streaming.",
         },
     },
+}
+
+
+FUNASR_ENGINE_TYPES = {
+    "sensevoice",
+    "sensevoice_zh",
+    "paraformer",
+    "paraformer_full",
+    "paraformer_large",
+    "paraformer_spk",
+    "paraformer_streaming",
 }
 
 
@@ -377,9 +488,19 @@ def _normalize_engine_type(engine_type: str | None) -> str:
         "qwen3_asr": "qwen3",
         "funasr_sensevoice": "sensevoice",
         "sensevoice_small": "sensevoice",
+        "sensevoice_cn": "sensevoice_zh",
+        "sensevoice_chinese": "sensevoice_zh",
+        "sensevoice_zh_cn": "sensevoice_zh",
+        "funasr_sensevoice_zh": "sensevoice_zh",
         "funasr_paraformer": "paraformer",
         "paraformer_zh": "paraformer",
-        "paraformer_large": "paraformer",
+        "paraformer_punc": "paraformer_full",
+        "paraformer_vad_punc": "paraformer_full",
+        "paraformer_full_stack": "paraformer_full",
+        "paraformer_large_vad_punc": "paraformer_large",
+        "paraformer_speaker": "paraformer_spk",
+        "paraformer_spk": "paraformer_spk",
+        "paraformer_speaker_tags": "paraformer_spk",
         "funasr_streaming": "paraformer_streaming",
         "streaming": "paraformer_streaming",
     }
@@ -404,15 +525,9 @@ def get_asr_engine(engine_type: str | None = None):
     if engine_type == "qwen3":
         from engine.asr_engine import ASREngine
         return ASREngine()
-    if engine_type == "sensevoice":
+    if engine_type in FUNASR_ENGINE_TYPES:
         from .funasr_engine import FunASREngine
-        return FunASREngine(kind="sensevoice")
-    if engine_type == "paraformer":
-        from .funasr_engine import FunASREngine
-        return FunASREngine(kind="paraformer")
-    if engine_type == "paraformer_streaming":
-        from .funasr_engine import FunASREngine
-        return FunASREngine(kind="paraformer_streaming")
+        return FunASREngine(kind=engine_type)
     raise AssertionError(f"Unhandled ASR engine: {engine_type}")
 
 
@@ -544,7 +659,7 @@ class ASREngineManager:
 
                 ASREngine._instance = None
                 return
-            if engine_type in {"sensevoice", "paraformer", "paraformer_streaming"}:
+            if engine_type in FUNASR_ENGINE_TYPES:
                 from .funasr_engine import FunASREngine
 
                 FunASREngine._instances.pop(engine_type, None)
