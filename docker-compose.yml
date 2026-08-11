@@ -1,0 +1,39 @@
+services:
+  matrix:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: matrix-live-diarizer:local
+    container_name: matrix
+    restart: unless-stopped
+    # 容器加固:禁止提权 + 丢弃所有 Linux capabilities + 限制进程/内存,
+    # 缩小容器内 RCE(如模型加载漏洞)的爆炸半径。
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    mem_limit: 8g
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "${PORT:-8000}:${PORT:-8000}"
+    volumes:
+      - matrix-data:/app/data
+      - matrix-speakers:/app/engine/speaker/speaker_db
+      - matrix-uploads:/app/uploads
+      - matrix-models:/home/matrix/.cache/modelscope
+      - matrix-hf-cache:/home/matrix/.cache/huggingface
+      - matrix-torch-cache:/home/matrix/.cache/torch
+    extra_hosts:
+      # Mac/Windows 访问宿主机的 Ollama
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  matrix-data:
+  matrix-speakers:
+  matrix-uploads:
+  matrix-models:
+  matrix-hf-cache:
+  matrix-torch-cache:
