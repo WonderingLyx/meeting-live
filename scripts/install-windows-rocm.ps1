@@ -326,6 +326,74 @@ function Get-RemoteContentLength($Url) {
     return 0
 }
 
+function Invoke-RetryingDownload($Url, $Destination, [int64]$ExpectedLength) {
+    $tempPath = "$Destination.part"
+    $methods = @()
+    $curl = Get-Command "curl.exe" -ErrorAction SilentlyContinue
+    if ($curl) {
+        $methods += @{ Name = "curl.exe"; Kind = "curl"; Path = $curl.Source }
+    }
+    if (Get-Command "Start-BitsTransfer" -ErrorAction SilentlyContinue) {
+        $methods += @{ Name = "BITS"; Kind = "bits"; Path = "" }
+    }
+    $methods += @{ Name = "Invoke-WebRequest"; Kind = "iwr"; Path = "" }
+
+    $lastError = ""
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        foreach ($method in $methods) {
+            if (Test-Path -LiteralPath $tempPath) {
+                Remove-Item -LiteralPath $tempPath -Force
+            }
+            try {
+                Write-Host ("Downloading with {0} (attempt {1}/4)" -f $method.Name, $attempt)
+                if ($method.Kind -eq "curl") {
+                    Invoke-External $method.Path @(
+                        "--fail",
+                        "--location",
+                        "--retry", "5",
+                        "--retry-delay", "2",
+                        "--connect-timeout", "30",
+                        "--output", $tempPath,
+                        $Url
+                    ) "curl.exe download failed"
+                } elseif ($method.Kind -eq "bits") {
+                    Start-BitsTransfer -Source $Url -Destination $tempPath -ErrorAction Stop
+                } else {
+                    $oldProgress = $ProgressPreference
+                    try {
+                        $script:ProgressPreference = "SilentlyContinue"
+                        Invoke-WebRequest -Uri $Url -OutFile $tempPath -UseBasicParsing -TimeoutSec 3600
+                    } finally {
+                        $script:ProgressPreference = $oldProgress
+                    }
+                }
+
+                if (-not (Test-Path -LiteralPath $tempPath)) {
+                    throw "download produced no file"
+                }
+                $actualLength = (Get-Item -LiteralPath $tempPath).Length
+                if ($actualLength -le 0) {
+                    throw "downloaded file is empty"
+                }
+                if ($ExpectedLength -gt 0 -and $actualLength -ne $ExpectedLength) {
+                    throw "size mismatch: expected $ExpectedLength bytes, got $actualLength bytes"
+                }
+                Move-Item -LiteralPath $tempPath -Destination $Destination -Force
+                return
+            } catch {
+                $lastError = $_.Exception.Message
+                Write-Warn ("{0} failed: {1}" -f $method.Name, $lastError)
+            }
+        }
+        Start-Sleep -Seconds ([Math]::Min(20, 2 * $attempt))
+    }
+
+    if (Test-Path -LiteralPath $tempPath) {
+        Remove-Item -LiteralPath $tempPath -Force
+    }
+    throw "Download failed after retries: $Url. Last error: $lastError"
+}
+
 function Save-ArtifactIfNeeded($Artifact, $CacheDir) {
     New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
     $target = Join-Path $CacheDir $Artifact.File
@@ -341,12 +409,7 @@ function Save-ArtifactIfNeeded($Artifact, $CacheDir) {
     }
 
     Write-Host "Downloading $($Artifact.File)"
-    $bits = Get-Command "Start-BitsTransfer" -ErrorAction SilentlyContinue
-    if ($bits) {
-        Start-BitsTransfer -Source $Artifact.Url -Destination $target
-    } else {
-        Invoke-WebRequest -Uri $Artifact.Url -OutFile $target -UseBasicParsing
-    }
+    Invoke-RetryingDownload $Artifact.Url $target $remoteLength
     if (-not (Test-Path -LiteralPath $target) -or (Get-Item -LiteralPath $target).Length -le 0) {
         throw "Download failed: $($Artifact.Url)"
     }
