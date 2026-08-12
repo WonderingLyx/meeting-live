@@ -1,5 +1,6 @@
 """Meeting list, detail, correction, audio, and deletion API."""
 import asyncio
+import hashlib
 import logging
 import uuid
 import wave
@@ -40,6 +41,60 @@ AUDIO_MEDIA_TYPES = {
 
 def _audio_media_type(path: Path) -> str:
     return AUDIO_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+
+
+def _browser_playback_cache_path(source: Path) -> Path:
+    stat = source.stat()
+    key = "|".join((str(source.resolve()), str(stat.st_size), str(stat.st_mtime_ns)))
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+    return Path(config.storage.media_dir).resolve() / "playback" / f"{digest}.wav"
+
+
+def _is_browser_pcm_wav(path: Path) -> bool:
+    if path.suffix.lower() != ".wav":
+        return False
+    try:
+        with wave.open(str(path), "rb") as wf:
+            return (
+                wf.getcomptype() == "NONE"
+                and wf.getnchannels() in (1, 2)
+                and wf.getsampwidth() == 2
+                and wf.getframerate() > 0
+                and wf.getnframes() > 0
+            )
+    except (EOFError, OSError, wave.Error):
+        return False
+
+
+def _browser_playback_audio(path: Path) -> Path:
+    """Return browser-decodable PCM WAV, converting and caching if needed."""
+    if _is_browser_pcm_wav(path):
+        return path
+    target = _browser_playback_cache_path(path)
+    if target.is_file() and target.stat().st_size > 44:
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f"{target.stem}.{uuid.uuid4().hex}.tmp.wav")
+    try:
+        import librosa
+        import numpy as np
+        import soundfile as sf
+
+        audio, sample_rate = librosa.load(str(path), sr=config.audio.sample_rate, mono=True)
+        audio = np.asarray(audio, dtype=np.float32)
+        if sample_rate <= 0 or audio.size == 0:
+            raise ValueError("decoded audio is empty")
+        sf.write(
+            str(tmp),
+            np.clip(audio, -1.0, 1.0),
+            int(sample_rate),
+            format="WAV",
+            subtype="PCM_16",
+        )
+        tmp.replace(target)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return target
 
 
 def _playable_live_audio(path: Path) -> tuple[bool, str]:
@@ -301,7 +356,11 @@ def reprocess_meeting(meeting_id: str, request: Request):
 
 
 @router.get("/{meeting_id}/audio")
-def meeting_audio(meeting_id: str, request: Request):
+def meeting_audio(
+    meeting_id: str,
+    request: Request,
+    playback: str = Query("original", pattern="^(original|browser)$"),
+):
     meeting = request.app.state.meeting_repo.get(meeting_id)
     if meeting is None:
         raise HTTPException(status_code=404, detail="会议不存在")
@@ -317,10 +376,24 @@ def meeting_audio(meeting_id: str, request: Request):
         playable, reason = _playable_live_audio(path)
         if not playable:
             raise HTTPException(status_code=409, detail=reason)
+    serve_path = path
+    filename = meeting.get("original_filename") or path.name
+    media_type = _audio_media_type(path)
+    if playback == "browser":
+        try:
+            serve_path = _browser_playback_audio(path)
+            filename = f"{path.stem}.playback.wav"
+            media_type = "audio/wav"
+        except Exception as exc:
+            logger.warning("[audio] %s 转换浏览器播放音频失败: %s", meeting_id, exc)
+            raise HTTPException(
+                status_code=409,
+                detail="会议音频无法转换成浏览器可播放格式，请确认 FFmpeg/libsndfile 可用",
+            ) from None
     return FileResponse(
-        path,
-        filename=meeting.get("original_filename") or path.name,
-        media_type=_audio_media_type(path),
+        serve_path,
+        filename=filename,
+        media_type=media_type,
         content_disposition_type="inline",
         headers={"Cache-Control": "no-store", "Accept-Ranges": "bytes"},
     )

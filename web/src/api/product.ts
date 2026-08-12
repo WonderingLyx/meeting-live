@@ -68,7 +68,7 @@ function emitAudioApiError(message: string, status?: number) {
 }
 
 export async function getMeetingAudioUrl(id:string) {
-  const r=await apiClient.get(`/v1/meetings/${encodeURIComponent(id)}/audio`,{params:{_:Date.now()},responseType:'blob',timeout:0,validateStatus:()=>true})
+  const r=await apiClient.get(`/v1/meetings/${encodeURIComponent(id)}/audio`,{params:{playback:'browser',_:Date.now()},responseType:'blob',timeout:0,validateStatus:()=>true})
   const type=String(r.headers?.['content-type']||'audio/wav').split(';',1)[0].trim().toLowerCase()
   if (r.status<200||r.status>=300) {
     const message=await audioBlobError(r.data,`会议音频请求失败 HTTP ${r.status}`)

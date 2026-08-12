@@ -186,6 +186,30 @@ def test_meeting_audio_and_delete(tmp_path):
     assert not audio.exists()
 
 
+def test_meeting_audio_browser_playback_transcodes_cached_wav(tmp_path, monkeypatch):
+    from app.api import meetings as meetings_api
+
+    client, app = make_client(tmp_path)
+    media_dir = tmp_path / "media"
+    monkeypatch.setattr(meetings_api.config.storage, "media_dir", str(media_dir))
+    audio = tmp_path / "recording.weird"
+    audio.write_bytes(b"not-browser-decodable")
+    meeting_id = app.state.meeting_repo.create(
+        source="upload",
+        title="playback",
+        audio_path=str(audio),
+        original_filename="recording.wav",
+    )
+
+    response = client.get(f"/v1/meetings/{meeting_id}/audio?playback=browser")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("audio/wav")
+    assert response.content.startswith(b"RIFF")
+    assert audio.read_bytes() == b"not-browser-decodable"
+    assert list((media_dir / "playback").glob("*.wav"))
+
+
 def test_upload_immediately_creates_durable_job(tmp_path, monkeypatch):
     from app.api import meetings as meetings_api
 
