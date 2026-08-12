@@ -66,31 +66,102 @@ def _is_browser_pcm_wav(path: Path) -> bool:
         return False
 
 
+def _recover_pcm_wav_payload(path: Path) -> tuple[object, int]:
+    """Recover PCM samples from WAV files whose headers under-report data size."""
+    import numpy as np
+
+    raw = path.read_bytes()
+    if len(raw) < 44 or raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
+        raise ValueError("not a RIFF/WAVE file")
+
+    fmt: dict[str, int] | None = None
+    data_start = 0
+    data_size = 0
+    offset = 12
+    while offset + 8 <= len(raw):
+        chunk_id = raw[offset : offset + 4]
+        chunk_size = int.from_bytes(raw[offset + 4 : offset + 8], "little")
+        start = offset + 8
+        if start > len(raw):
+            break
+        if chunk_id == b"fmt " and start + 16 <= len(raw):
+            fmt = {
+                "format": int.from_bytes(raw[start : start + 2], "little"),
+                "channels": int.from_bytes(raw[start + 2 : start + 4], "little"),
+                "sample_rate": int.from_bytes(raw[start + 4 : start + 8], "little"),
+                "block_align": int.from_bytes(raw[start + 12 : start + 14], "little"),
+                "bits": int.from_bytes(raw[start + 14 : start + 16], "little"),
+            }
+        elif chunk_id == b"data":
+            data_start = start
+            data_size = len(raw) - start
+            break
+        next_offset = start + chunk_size + (chunk_size % 2)
+        if next_offset <= offset:
+            break
+        offset = next_offset
+
+    if not fmt or not data_start or data_size <= 0:
+        raise ValueError("missing WAV fmt/data payload")
+    if fmt["format"] != 1 or fmt["bits"] != 16:
+        raise ValueError("only PCM16 WAV payload recovery is supported")
+    channels = fmt["channels"]
+    sample_rate = fmt["sample_rate"] or config.audio.sample_rate
+    block_align = fmt["block_align"] or channels * 2
+    usable = (data_size // block_align) * block_align
+    if channels <= 0 or usable <= 0:
+        raise ValueError("empty WAV PCM payload")
+
+    pcm = np.frombuffer(raw[data_start : data_start + usable], dtype="<i2")
+    if channels > 1:
+        pcm = pcm.reshape(-1, channels).mean(axis=1)
+    audio = pcm.astype(np.float32) / 32768.0
+    if audio.size == 0:
+        raise ValueError("empty recovered WAV audio")
+    return audio, int(sample_rate)
+
+
+def _write_pcm16_wav(path: Path, audio: object, sample_rate: int) -> None:
+    import numpy as np
+
+    samples = np.asarray(audio, dtype=np.float32)
+    if samples.ndim > 1:
+        samples = samples.mean(axis=1)
+    if samples.size == 0 or sample_rate <= 0:
+        raise ValueError("decoded audio is empty")
+    pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2")
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(int(sample_rate))
+        wf.writeframes(pcm.tobytes())
+
+
 def _browser_playback_audio(path: Path) -> Path:
     """Return browser-decodable PCM WAV, converting and caching if needed."""
-    if _is_browser_pcm_wav(path):
-        return path
     target = _browser_playback_cache_path(path)
-    if target.is_file() and target.stat().st_size > 44:
+    if target.is_file() and _is_browser_pcm_wav(target):
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f"{target.stem}.{uuid.uuid4().hex}.tmp.wav")
     try:
-        import librosa
-        import numpy as np
-        import soundfile as sf
+        if path.suffix.lower() == ".wav":
+            try:
+                audio, sample_rate = _recover_pcm_wav_payload(path)
+            except Exception as exc:
+                logger.warning("[audio] %s PCM WAV 恢复失败，回退到常规解码: %s", path, exc)
+                import librosa
+                import numpy as np
 
-        audio, sample_rate = librosa.load(str(path), sr=config.audio.sample_rate, mono=True)
-        audio = np.asarray(audio, dtype=np.float32)
-        if sample_rate <= 0 or audio.size == 0:
-            raise ValueError("decoded audio is empty")
-        sf.write(
-            str(tmp),
-            np.clip(audio, -1.0, 1.0),
-            int(sample_rate),
-            format="WAV",
-            subtype="PCM_16",
-        )
+                audio, sample_rate = librosa.load(str(path), sr=config.audio.sample_rate, mono=True)
+                audio = np.asarray(audio, dtype=np.float32)
+        else:
+            import librosa
+            import numpy as np
+
+            audio, sample_rate = librosa.load(str(path), sr=config.audio.sample_rate, mono=True)
+            audio = np.asarray(audio, dtype=np.float32)
+        _write_pcm16_wav(tmp, audio, int(sample_rate))
         tmp.replace(target)
     finally:
         tmp.unlink(missing_ok=True)

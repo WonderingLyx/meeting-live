@@ -67,7 +67,7 @@ function emitAudioApiError(message: string, status?: number) {
   }))
 }
 
-export async function getMeetingAudioUrl(id:string) {
+export async function getMeetingAudioBlob(id:string) {
   const r=await apiClient.get(`/v1/meetings/${encodeURIComponent(id)}/audio`,{params:{playback:'browser',_:Date.now()},responseType:'blob',timeout:0,validateStatus:()=>true})
   const type=String(r.headers?.['content-type']||'audio/wav').split(';',1)[0].trim().toLowerCase()
   if (r.status<200||r.status>=300) {
@@ -87,7 +87,10 @@ export async function getMeetingAudioUrl(id:string) {
     emitAudioApiError(message,r.status)
     throw new Error(message)
   }
-  return URL.createObjectURL(blob)
+  return blob
+}
+export async function getMeetingAudioUrl(id:string) {
+  return URL.createObjectURL(await getMeetingAudioBlob(id))
 }
 export async function uploadMeeting(file:File, mode:'quick'|'meeting', onProgress?:(n:number)=>void) {
   const data = new FormData(); data.append('file',file,file.name||'upload.wav')
