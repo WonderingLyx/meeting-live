@@ -180,6 +180,19 @@ def _is_authenticated_status_request(request: Request) -> bool:
     return current_pwd_iat <= token_pwd_iat
 
 
+def _normalize_llm_endpoint(value: str) -> str:
+    value = value.strip().rstrip("/")
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("endpoint 必须是 http:// 或 https:// 开头的完整地址")
+    lowered = value.lower()
+    for suffix in ("/chat/completions", "/models"):
+        if lowered.endswith(suffix):
+            value = value[: -len(suffix)].rstrip("/")
+            break
+    return value
+
+
 class LLMSettingsRequest(BaseModel):
     provider: str = Field("ollama", min_length=1, max_length=40)
     enabled: bool = False
@@ -194,10 +207,7 @@ class LLMSettingsRequest(BaseModel):
     @field_validator("endpoint")
     @classmethod
     def _endpoint_must_be_openai_compatible_base(cls, value: str) -> str:
-        value = value.strip().rstrip("/")
-        if not value.startswith(("http://", "https://")):
-            raise ValueError("endpoint 必须以 http:// 或 https:// 开头")
-        return value
+        return _normalize_llm_endpoint(value)
 
     @field_validator("provider", "model")
     @classmethod
@@ -270,9 +280,10 @@ async def llm_models(
     """List model ids from the configured LLM endpoint on explicit request."""
     cfg, _source, saved_provider = _effective_llm_cfg(_settings_repo(request))
     if endpoint is not None:
-        endpoint = endpoint.strip().rstrip("/")
-        if not endpoint.startswith(("http://", "https://")):
-            raise HTTPException(status_code=422, detail="endpoint 必须以 http:// 或 https:// 开头")
+        try:
+            endpoint = _normalize_llm_endpoint(endpoint)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         cfg = replace(cfg, endpoint=endpoint)
     if allow_public is not None:
         cfg = replace(cfg, allow_public=allow_public)

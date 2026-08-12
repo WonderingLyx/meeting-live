@@ -529,6 +529,7 @@ function showLlmHelp() {
       'LocalAI   →  http://127.0.0.1:8080/v1',
       'vLLM      →  http://127.0.0.1:8000/v1    (自部署)',
       'OpenRouter / 自建反向代理 (OpenAI 协议)',
+      '填写 OpenAI-compatible API base 即可；程序会自动调用 /chat/completions。',
       '',
       '在 .env 中设置:',
       '  LLM_ENABLED=true',

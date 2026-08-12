@@ -149,9 +149,17 @@ class LLMGateway:
             resp = await self._post_with_dns_guard(
                 url, payload=payload, headers=headers, timeout=5.0
             )
-            return resp.status_code == 200
+            if resp.status_code == 200:
+                return True
+            logger.info(
+                "[LLM] 探测失败: POST %s 返回 %s %s",
+                url,
+                resp.status_code,
+                resp.text[:200],
+            )
+            return False
         except Exception as e:
-            logger.info(f"[LLM] 探测失败: {e}")
+            logger.info("[LLM] 探测失败: POST %s 异常 %r", url, e)
             return False
 
     async def summarize(self, segments: list[dict], max_words: int = 200) -> Optional[str]:
@@ -203,8 +211,6 @@ class LLMGateway:
             try:
                 if self.config.mock:
                     return self._mock_response(op, segments, **kwargs), "llm"
-                if not await self.is_available():
-                    raise LLMUnavailableError(f"LLM 不可用: {self.config.endpoint}")
                 transcript = self._segments_to_text(segments)
                 # summarize:按会议总时长自适应摘要篇幅(调用方未显式传 max_words 时)。
                 # 见 _adaptive_max_words:短~120/中~200/长~300/超长~400 字。
@@ -404,13 +410,23 @@ class LLMGateway:
                 raise EndpointSecurityError(
                     f"LLM endpoint 返回重定向 {resp.status_code},已拒绝(follow_redirects=False)。"
                 )
+            if resp.status_code >= 400:
+                raise LLMUnavailableError(
+                    f"LLM 返回 HTTP {resp.status_code}: {resp.text[:500]}"
+                )
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"]
         except httpx.TimeoutException as e:
-            raise LLMTimeoutError(f"LLM 调用超时: {e}") from e
+            raise LLMTimeoutError(
+                f"LLM 调用超时: POST {url} 超过 {self.config.timeout_sec}s"
+            ) from e
         except httpx.HTTPError as e:
-            raise LLMUnavailableError(f"LLM HTTP 错误: {e}") from e
+            raise LLMUnavailableError(f"LLM HTTP 错误: {type(e).__name__}: {e!r}") from e
+        except EndpointSecurityError:
+            raise
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            raise LLMUnavailableError(f"LLM 响应格式不兼容: {type(e).__name__}: {e!r}") from e
 
     def _assert_no_dns_rebind(self) -> None:
         """请求前再校验一次:当前 DNS 解析结果与 init 缓存的 IP 是否一致。

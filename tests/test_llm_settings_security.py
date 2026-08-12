@@ -175,6 +175,30 @@ def test_saving_settings_clears_probe_without_testing(monkeypatch):
     assert app.state.llm_probe_result is None
 
 
+def test_settings_accepts_custom_llm_base_and_normalizes_known_leaf_paths():
+    client = TestClient(_llm_app())
+    base_payload = {
+        "provider": "custom",
+        "enabled": True,
+        "model": "test-model",
+        "allow_public": False,
+    }
+
+    auth_base = client.put(
+        "/v1/llm/settings",
+        json={**base_payload, "endpoint": "http://127.0.0.1:19700/auth/v1"},
+    )
+    chat_leaf = client.put(
+        "/v1/llm/settings",
+        json={**base_payload, "endpoint": "http://127.0.0.1:11434/v1/chat/completions"},
+    )
+
+    assert auth_base.status_code == 200
+    assert auth_base.json()["endpoint"] == "http://127.0.0.1:19700/auth/v1"
+    assert chat_leaf.status_code == 200
+    assert chat_leaf.json()["endpoint"] == "http://127.0.0.1:11434/v1"
+
+
 def test_llm_models_lists_openai_compatible_models(monkeypatch):
     monkeypatch.setenv("TEST_AUTH_BYPASS", "1")
     monkeypatch.setattr(

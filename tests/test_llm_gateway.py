@@ -248,6 +248,52 @@ def test_generate_falls_back_on_llm_error(monkeypatch):
     assert len(result) > 0
 
 
+def test_generate_does_not_preflight_probe_before_real_call(monkeypatch):
+    """生成纪要直接调用真实请求,不因一次轻量探测失败提前降级。"""
+    import app.services.llm_gateway as gw_mod
+    from app.services.llm_gateway import LLMGateway
+    from app.config import LLMConfig
+
+    calls = {"real": 0}
+
+    class FakeResp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "LLM 生成内容"}}]}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json, headers=None):
+            calls["real"] += 1
+            return FakeResp()
+
+    async def fake_probe(self):
+        raise AssertionError("生成路径不应先做预探测")
+
+    monkeypatch.setattr(LLMGateway, "_probe", fake_probe)
+    monkeypatch.setattr(gw_mod.httpx, "AsyncClient", FakeClient)
+
+    cfg = LLMConfig(enabled=True, endpoint="http://127.0.0.1:19700/auth/v1")
+    gw = LLMGateway(cfg)
+    text, source = asyncio.run(gw._generate("minutes", [{"text": "今天讨论项目进展。"}]))
+
+    assert text == "LLM 生成内容"
+    assert source == "llm"
+    assert calls["real"] == 1
+
+
 def test_generate_falls_back_on_timeout(monkeypatch):
     """LLM 超时时降级"""
     from app.services.llm_gateway import LLMGateway, LLMTimeoutError

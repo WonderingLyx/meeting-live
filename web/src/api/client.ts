@@ -10,6 +10,18 @@ export const apiClient = axios.create({
 function errorMessage(detail: unknown, fallback: string) {
   if (typeof detail === 'string') return detail
   if (detail == null) return fallback
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (!item || typeof item !== 'object' || !('msg' in item)) return ''
+        return String((item as { msg?: unknown }).msg || '').replace(/^Value error,\s*/i, '')
+      })
+      .filter(Boolean)
+    if (messages.length) return messages.join('; ')
+  }
+  if (typeof detail === 'object' && 'message' in detail) {
+    return String((detail as { message?: unknown }).message || fallback)
+  }
   try {
     return JSON.stringify(detail)
   } catch {
