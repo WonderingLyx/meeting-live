@@ -464,6 +464,9 @@ async def audio_processor(
         sample_rate = config.audio.sample_rate
         skip_frame_threshold = config.audio.skip_frame_threshold
         timeout_seconds = config.audio.timeout_seconds
+        live_auto_stop_on_silence = bool(getattr(config.audio, "live_auto_stop_on_silence", False))
+        if timeout_seconds <= 0 or not live_auto_stop_on_silence:
+            timeout_seconds = float("inf")
         # 新增：语音段最大长度（秒）
         max_segment_seconds = getattr(config.audio, 'max_segment_seconds', 5)
     except (AttributeError, TypeError) as e:
@@ -584,6 +587,7 @@ async def audio_processor(
                 state = STATE_SPEECH
                 speech_buffer = chunk.copy()
                 speech_start_sample = chunk_start_sample
+                last_active_time = time.time()
                 silence_frame_count = 0
                 silence_sample_count = 0
                 logger.debug(f"[PROCESSOR] {client_id} 语音开始")
@@ -1133,11 +1137,23 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         pass
             
             elif msg_type == "websocket.disconnect":
+                logger.info(
+                    "[RECEIVER] %s websocket.disconnect code=%s reason=%s",
+                    client_id,
+                    message.get("code"),
+                    message.get("reason"),
+                )
                 logger.info(f"[RECEIVER] {client_id} 客户端主动断开")
                 stop_event.set()
                 break
             
             elif msg_type == "websocket.close":
+                logger.info(
+                    "[RECEIVER] %s websocket.close code=%s reason=%s",
+                    client_id,
+                    message.get("code"),
+                    message.get("reason"),
+                )
                 logger.info(f"[RECEIVER] {client_id} 收到关闭消息")
                 stop_event.set()
                 break
