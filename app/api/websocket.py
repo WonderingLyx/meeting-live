@@ -126,7 +126,17 @@ async def _append_live_audio(
             meeting_id,
             audio_path=str(audio_path),
         )
-    writer.writeframesraw(pcm_bytes)
+    writer.writeframes(pcm_bytes)
+    now = time.time()
+    websocket._audio_bytes_written = (
+        int(getattr(websocket, "_audio_bytes_written", 0)) + len(pcm_bytes)
+    )
+    websocket._audio_last_write_at = now
+    if now - float(getattr(websocket, "_audio_last_flush_at", 0.0)) >= 1.0:
+        raw_file = getattr(writer, "_file", None)
+        if raw_file is not None and hasattr(raw_file, "flush"):
+            raw_file.flush()
+        websocket._audio_last_flush_at = now
 
 
 def _close_live_audio(websocket: WebSocket) -> None:
@@ -1050,6 +1060,13 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     except (AttributeError, TypeError):
         receive_timeout = 35  # 默认值
 
+    live_debug = bool(getattr(config.audio, "live_debug", False))
+    receiver_frames = 0
+    receiver_bytes = 0
+    receiver_started_at = time.time()
+    last_debug_at = receiver_started_at
+    last_message_at = receiver_started_at
+    last_audio_at = None
     logger.info(f"[WS] 用户 {client_id} 已接入")
 
     # 创建协程任务
@@ -1078,10 +1095,26 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     timeout=receive_timeout
                 )
             except asyncio.TimeoutError:
+                now = time.time()
+                wav_sec = int(getattr(websocket, "_audio_bytes_written", 0)) / (
+                    config.audio.sample_rate * 2
+                )
+                audio_gap = None if last_audio_at is None else now - last_audio_at
+                logger.warning(
+                    "[RECEIVER] %s receive timeout message_gap=%.1fs audio_gap=%s "
+                    "recv_frames=%d recv_bytes=%d wav_sec=%.2f",
+                    client_id,
+                    now - last_message_at,
+                    "-" if audio_gap is None else f"{audio_gap:.1f}s",
+                    receiver_frames,
+                    receiver_bytes,
+                    wav_sec,
+                )
                 logger.warning(f"[RECEIVER] {client_id} 接收超时，断开连接")
                 stop_event.set()
                 break
 
+            last_message_at = time.time()
             msg_type = message.get("type")
 
             if msg_type == "websocket.receive":
@@ -1089,6 +1122,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     # 文本命令：{"action": "rename", "title": "..."}
                     try:
                         cmd = json.loads(message["text"])
+                        if isinstance(cmd, dict) and cmd.get("action") == "ping":
+                            continue
                         if isinstance(cmd, dict) and cmd.get("action") == "rename":
                             new_title = str(cmd.get("title") or "").strip()
                             meeting_id = await _ensure_live_meeting(
@@ -1116,10 +1151,31 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 
                 if "bytes" in message:
                     data = message["bytes"]
+                    now = time.time()
+                    receiver_frames += 1
+                    receiver_bytes += len(data)
+                    last_audio_at = now
                     try:
                         await _append_live_audio(websocket, client_id, data)
                     except Exception as exc:
                         logger.warning("[WS] 实时音频保存失败: %s", exc)
+                    if live_debug and now - last_debug_at >= 5.0:
+                        wav_sec = int(getattr(websocket, "_audio_bytes_written", 0)) / (
+                            config.audio.sample_rate * 2
+                        )
+                        logger.info(
+                            "[LIVE DEBUG] %s recv_frames=%d recv_bytes=%d wav_sec=%.2f "
+                            "queue=%d/%d elapsed=%.1fs path=%s",
+                            client_id,
+                            receiver_frames,
+                            receiver_bytes,
+                            wav_sec,
+                            queue.qsize(),
+                            queue.maxsize,
+                            now - receiver_started_at,
+                            getattr(websocket, "_audio_path", None),
+                        )
+                        last_debug_at = now
                 else:
                     continue
 
@@ -1162,6 +1218,19 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         logger.error(f"[WS ERROR] {client_id} {e}")
     
     finally:
+        elapsed = time.time() - receiver_started_at
+        wav_sec = int(getattr(websocket, "_audio_bytes_written", 0)) / (
+            config.audio.sample_rate * 2
+        )
+        logger.info(
+            "[LIVE SUMMARY] %s recv_frames=%d recv_bytes=%d wav_sec=%.2f elapsed=%.1fs path=%s",
+            client_id,
+            receiver_frames,
+            receiver_bytes,
+            wav_sec,
+            elapsed,
+            getattr(websocket, "_audio_path", None),
+        )
         # 设置停止信号
         stop_event.set()
 

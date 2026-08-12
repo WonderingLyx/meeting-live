@@ -25,6 +25,22 @@ export interface LiveSegment {
   speakerState?: 'unknown' | 'provisional' | 'final'
 }
 
+export interface LiveDebugState {
+  startedAt: number
+  audioCallbacks: number
+  sentFrames: number
+  sentSamples: number
+  droppedFrames: number
+  lastAudioAt: number
+  lastSentAt: number
+  lastCloseCode: number | null
+  lastCloseReason: string
+  lastWsEvent: string
+  audioContextState: string
+  deviceSampleRate: number
+  wsBufferedAmount: number
+}
+
 export const useLiveStore = defineStore('live', () => {
   const auth = useAuthStore()
   const router = useRouter()
@@ -55,7 +71,28 @@ export const useLiveStore = defineStore('live', () => {
   let ws: LiveWs | null = null
   let rafId: number | null = null
   let timerId: ReturnType<typeof setInterval> | null = null
+  let debugTimerId: ReturnType<typeof setInterval> | null = null
   let segSeq = 0
+
+  const debug = ref<LiveDebugState>({
+    startedAt: 0,
+    audioCallbacks: 0,
+    sentFrames: 0,
+    sentSamples: 0,
+    droppedFrames: 0,
+    lastAudioAt: 0,
+    lastSentAt: 0,
+    lastCloseCode: null,
+    lastCloseReason: '',
+    lastWsEvent: '',
+    audioContextState: 'idle',
+    deviceSampleRate: 0,
+    wsBufferedAmount: 0,
+  })
+
+  function updateDebug(patch: Partial<LiveDebugState>) {
+    debug.value = { ...debug.value, ...patch }
+  }
 
   function registerSpeaker(speaker: string) {
     if (!speaker) return
@@ -277,18 +314,43 @@ export const useLiveStore = defineStore('live', () => {
     segSeq = 0
     recStart.value = Date.now()
     rec.value = true
+    updateDebug({
+      startedAt: recStart.value,
+      audioCallbacks: 0,
+      sentFrames: 0,
+      sentSamples: 0,
+      droppedFrames: 0,
+      lastAudioAt: 0,
+      lastSentAt: 0,
+      lastCloseCode: null,
+      lastCloseReason: '',
+      lastWsEvent: 'starting',
+      audioContextState: 'starting',
+      deviceSampleRate: 0,
+      wsBufferedAmount: 0,
+    })
     try {
       mic = await startMic()
       // bug-fix: 浏览器可能忽略 sampleRate:16000,实际 48kHz — 实时降采样到 16kHz
       const fromRate = mic.actualSampleRate
       const needResample = fromRate !== 16000
+      updateDebug({
+        audioContextState: mic.audioCtx.state,
+        deviceSampleRate: fromRate,
+      })
       if (needResample) {
         console.info(`[live] 降采样 ${fromRate}→16000 Hz`)
       }
       mic.processor.onaudioprocess = (ev) => {
         if (!mic) return
+        const now = Date.now()
         const inp = ev.inputBuffer.getChannelData(0)
         recRMS.value = rms(inp)
+        updateDebug({
+          audioCallbacks: debug.value.audioCallbacks + 1,
+          lastAudioAt: now,
+          audioContextState: mic.audioCtx.state,
+        })
         // RMS 在原始 48k 上算更准(不会被降采样平滑掉);但为了一致性,降采样后再算也可
         const pcm16k = needResample ? resampleTo16k(inp, fromRate) : inp
         const i16 = floatToInt16(pcm16k)
@@ -301,6 +363,7 @@ export const useLiveStore = defineStore('live', () => {
         onMessage,
         onState: (s) => {
           wsState.value = s
+          updateDebug({ lastWsEvent: s })
           // disconnected 表示重连已耗尽 5 次尝试,此时才终止录音
           if (s === 'disconnected' && rec.value) {
             window.toast?.(i18n.global.t('live.disconnected'), 'error')
@@ -308,6 +371,7 @@ export const useLiveStore = defineStore('live', () => {
           }
         },
         onClose: (code) => {
+          updateDebug({ lastCloseCode: code })
           if (code === 4401) {
             auth.clear()
             router.push({ name: 'login', query: { next: '/live' } })
@@ -333,10 +397,48 @@ export const useLiveStore = defineStore('live', () => {
         onReconnectFailed: () => {
           window.toast?.(i18n.global.t('live.reconnectFailed'), 'error')
         },
+        onDebug: (event, data) => {
+          if (event === 'audio_sent') {
+            updateDebug({
+              sentFrames: debug.value.sentFrames + 1,
+              sentSamples: debug.value.sentSamples + Number(data?.samples || 0),
+              lastSentAt: Date.now(),
+              wsBufferedAmount: Number(data?.bufferedAmount || 0),
+            })
+          } else if (event === 'audio_drop_buffered') {
+            updateDebug({
+              droppedFrames: debug.value.droppedFrames + 1,
+              wsBufferedAmount: Number(data?.bufferedAmount || 0),
+            })
+          } else if (event === 'ws_close') {
+            updateDebug({
+              lastWsEvent: event,
+              lastCloseCode: Number(data?.code || 0),
+              lastCloseReason: String(data?.reason || ''),
+            })
+          }
+        },
       })
       ws.connect()
       // 启动 timer
       timerId = setInterval(() => { recTimer.value = recTick() }, 1000)
+      debugTimerId = setInterval(() => {
+        if (!rec.value) return
+        const state = mic?.audioCtx.state || 'closed'
+        updateDebug({ audioContextState: state })
+        if (mic && state === 'suspended') {
+          mic.audioCtx.resume()
+            .then(() => updateDebug({ audioContextState: mic?.audioCtx.state || 'closed' }))
+            .catch(() => updateDebug({ lastWsEvent: 'audio_resume_failed' }))
+        }
+        ws?.sendPing({
+          client_audio_callbacks: debug.value.audioCallbacks,
+          client_sent_frames: debug.value.sentFrames,
+          client_sent_samples: debug.value.sentSamples,
+          client_dropped_frames: debug.value.droppedFrames,
+          client_audio_context_state: debug.value.audioContextState,
+        })
+      }, 5000)
       rafId = requestAnimationFrame(drawWave)
     } catch (e) {
       window.toast?.(`${e instanceof Error ? e.message : String(e)}`, 'error')
@@ -348,6 +450,7 @@ export const useLiveStore = defineStore('live', () => {
     rec.value = false
     if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null }
     if (timerId) { clearInterval(timerId); timerId = null }
+    if (debugTimerId) { clearInterval(debugTimerId); debugTimerId = null }
     if (mic) { mic.stop(); mic = null }
     if (ws) { ws.close(); ws = null }
     recRMS.value = 0
@@ -414,6 +517,7 @@ export const useLiveStore = defineStore('live', () => {
     segCount,
     spkCount,
     waveHist,
+    debug,
     speakerOverride,
     startRec,
     stopRec,

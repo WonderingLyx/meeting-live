@@ -18,9 +18,15 @@ const router = useRouter()
 const waveCanvas = ref<HTMLCanvasElement | null>(null)
 const models = ref<ModelsInfo | null>(null)
 const plannedTitle = ref('')
+const showDiagnostics = ref(false)
 
 function fmtTime(sec: number) {
   return fmtClock(sec)
+}
+
+function ago(value: number) {
+  if (!value) return '-'
+  return `${Math.max(0, ((Date.now() - value) / 1000)).toFixed(1)}s`
 }
 
 function drawWave() {
@@ -213,6 +219,41 @@ onMounted(loadModels)
           </div>
         </div>
       </div>
+    </div>
+    <div class="live-diagnostics">
+      <button
+        class="diag-toggle"
+        :class="{ open: showDiagnostics, active: live.rec }"
+        type="button"
+        :aria-expanded="showDiagnostics"
+        title="实时诊断"
+        @click="showDiagnostics = !showDiagnostics"
+      >
+        <span>诊断</span>
+        <b>{{ live.wsState }}</b>
+      </button>
+      <section v-if="showDiagnostics" class="diag-panel" aria-label="实时诊断">
+        <header>
+          <strong>实时录音诊断</strong>
+          <button type="button" @click="showDiagnostics = false">收起</button>
+        </header>
+        <dl>
+          <div><dt>rec</dt><dd>{{ live.rec ? 'true' : 'false' }}</dd></div>
+          <div><dt>ws</dt><dd>{{ live.wsState }}</dd></div>
+          <div><dt>audioCallbacks</dt><dd>{{ live.debug.audioCallbacks }}</dd></div>
+          <div><dt>sentFrames</dt><dd>{{ live.debug.sentFrames }}</dd></div>
+          <div><dt>sentSamples</dt><dd>{{ live.debug.sentSamples }}</dd></div>
+          <div><dt>droppedFrames</dt><dd>{{ live.debug.droppedFrames }}</dd></div>
+          <div><dt>lastAudio</dt><dd>{{ ago(live.debug.lastAudioAt) }}</dd></div>
+          <div><dt>lastSent</dt><dd>{{ ago(live.debug.lastSentAt) }}</dd></div>
+          <div><dt>audioCtx</dt><dd>{{ live.debug.audioContextState }}</dd></div>
+          <div><dt>sampleRate</dt><dd>{{ live.debug.deviceSampleRate || '-' }}</dd></div>
+          <div><dt>buffered</dt><dd>{{ live.debug.wsBufferedAmount }}</dd></div>
+          <div><dt>closeCode</dt><dd>{{ live.debug.lastCloseCode || '-' }}</dd></div>
+          <div><dt>closeReason</dt><dd>{{ live.debug.lastCloseReason || '-' }}</dd></div>
+          <div><dt>event</dt><dd>{{ live.debug.lastWsEvent || '-' }}</dd></div>
+        </dl>
+      </section>
     </div>
   </section>
 </template>
@@ -440,6 +481,19 @@ onMounted(loadModels)
 }
 .src-tag.websocket,.src-tag.live { color: var(--amber); background: var(--amber-soft); }
 .src-tag.upload { color: var(--teal); background: var(--teal-soft); }
+.live-diagnostics{position:fixed;right:18px;bottom:18px;z-index:70;display:flex;flex-direction:column;align-items:flex-end;gap:8px;max-width:min(520px,calc(100vw - 36px))}
+.diag-toggle{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 11px;border:1px solid var(--border);border-radius:6px;background:var(--ink-2);color:var(--text-3);font:11px var(--mono);box-shadow:0 8px 24px rgba(0,0,0,.24)}
+.diag-toggle.active{border-color:rgba(81,224,212,.45);color:var(--teal)}
+.diag-toggle.open{color:var(--amber)}
+.diag-toggle b{font-size:10px;color:inherit}
+.diag-panel{width:min(520px,calc(100vw - 36px));max-height:min(460px,calc(100vh - 100px));overflow:auto;border:1px solid rgba(81,224,212,.35);border-radius:8px;background:rgba(18,14,12,.98);box-shadow:0 18px 48px rgba(0,0,0,.38)}
+.diag-panel header{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;background:rgba(18,14,12,.98);border-bottom:1px solid var(--border-soft)}
+.diag-panel strong{font-size:12px;color:var(--text)}
+.diag-panel header button{color:var(--text-3);font:10px var(--mono)}
+.diag-panel dl{display:grid;grid-template-columns:1fr 1fr;margin:0}
+.diag-panel div{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;padding:9px 12px;border-bottom:1px solid var(--border-soft)}
+.diag-panel dt{color:var(--text-3);font:10px var(--mono)}
+.diag-panel dd{margin:0;color:var(--teal);font:10px var(--mono);overflow-wrap:anywhere}
 @media(max-width:980px){.live-grid{grid-template-columns:1fr;gap:28px}.live-side{border-top:1px solid var(--border);padding-top:24px}.live-heading{align-items:flex-start;flex-direction:column}.session-name{width:100%}}
-@media(max-width:700px){.live-wrap{padding:26px 20px 48px}.live-meta{gap:10px}.controls{flex-wrap:wrap}.empty-tips{grid-template-columns:1fr}}
+@media(max-width:700px){.live-wrap{padding:26px 20px 48px}.live-meta{gap:10px}.controls{flex-wrap:wrap}.empty-tips{grid-template-columns:1fr}.diag-panel dl{grid-template-columns:1fr}}
 </style>

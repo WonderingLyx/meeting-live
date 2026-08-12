@@ -91,6 +91,7 @@ class AudioConfig:
     silence_threshold: float = 0.008
     timeout_seconds: float = 30.0
     live_auto_stop_on_silence: bool = False
+    live_debug: bool = False
     # VAD
     vad_threshold: float = 0.5
     min_speech_duration_ms: int = 200
@@ -132,6 +133,7 @@ class AudioConfig:
             silence_threshold=get_env_float("AUDIO_SILENCE_THRESHOLD", 0.008),
             timeout_seconds=get_env_float("AUDIO_TIMEOUT_SECONDS", 30.0),
             live_auto_stop_on_silence=get_env_bool("LIVE_AUTO_STOP_ON_SILENCE", False),
+            live_debug=get_env_bool("LIVE_DEBUG", False),
             vad_threshold=get_env_float("VAD_THRESHOLD", 0.5),
             min_speech_duration_ms=get_env_int("VAD_MIN_SPEECH_DURATION", 200),
             target_rms=get_env_float("AUDIO_TARGET_RMS", 0.08),

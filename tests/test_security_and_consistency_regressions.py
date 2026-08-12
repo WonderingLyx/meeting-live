@@ -340,7 +340,7 @@ def test_append_live_audio_caps_at_max_duration(monkeypatch, tmp_path):
     class _FakeWriter:
         def __init__(self):
             self.written = b""
-        def writeframesraw(self, b):
+        def writeframes(self, b):
             self.written += b
         def close(self):
             pass

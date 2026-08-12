@@ -26,6 +26,7 @@ export interface LiveWsOpts {
   onMessage: (m: AsrMessage) => void
   onState: (s: WsState) => void
   onClose?: (code: number) => void
+  onDebug?: (event: string, data?: Record<string, unknown>) => void
   onReconnectAttempt?: (attempt: number, maxAttempts: number, delayMs: number) => void
   onReconnectFailed?: () => void
   onReconnected?: () => void
@@ -78,6 +79,13 @@ export class LiveWs {
       }
     }
     this.ws.onclose = (ev) => {
+      this.opts.onDebug?.('ws_close', {
+        code: ev.code,
+        reason: ev.reason,
+        wasClean: ev.wasClean,
+        reconnectAttempts: this.reconnectAttempts,
+        intentionalClose: this.intentionalClose,
+      })
       this.opts.onClose?.(ev.code)
       this.ws = null
       if (ev.code === 4401) {
@@ -113,16 +121,28 @@ export class LiveWs {
       // 背压保护:慢网络下浏览器发送缓冲持续累积,超过阈值丢帧避免
       // 内存膨胀 + 时间戳越拉越滞后。
       if (this.ws.bufferedAmount > 1_048_576) {
+        this.opts.onDebug?.('audio_drop_buffered', {
+          bufferedAmount: this.ws.bufferedAmount,
+          samples: int16.length,
+        })
         return
       }
       // Send the view, not its backing buffer: callers may pass a subarray and
       // the backing buffer can contain samples outside the requested frame.
       this.ws.send(int16)
+      this.opts.onDebug?.('audio_sent', {
+        samples: int16.length,
+        bufferedAmount: this.ws.bufferedAmount,
+      })
     }
   }
 
   sendRename(title: string) {
     this.sendJson({ action: 'rename', title })
+  }
+
+  sendPing(stats?: Record<string, unknown>) {
+    this.sendJson({ action: 'ping', ...stats })
   }
 
   private sendJson(o: object) {

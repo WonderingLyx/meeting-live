@@ -40,6 +40,25 @@ def test_realtime_pcm_is_saved_as_playable_meeting_wav(tmp_path, monkeypatch):
         assert recording.getnframes() == 3200
 
 
+def test_realtime_wav_header_updates_before_close(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "live-audio-open.db"))
+    db.init_schema()
+    repo = MeetingRepository(db)
+    socket = Socket(repo)
+    monkeypatch.setattr(config.storage, "media_dir", str(tmp_path / "media"))
+
+    asyncio.run(_append_live_audio(socket, "browser", b"\x01\x00" * 1600))
+    meeting = repo.get(socket._meeting_id)
+    with wave.open(meeting["audio_path"], "rb") as recording:
+        assert recording.getnframes() == 1600
+
+    asyncio.run(_append_live_audio(socket, "browser", b"\x02\x00" * 1600))
+    with wave.open(meeting["audio_path"], "rb") as recording:
+        assert recording.getnframes() == 3200
+
+    _close_live_audio(socket)
+
+
 def test_capped_live_session_keeps_transcript_not_queues_refinement(tmp_path, monkeypatch):
     """写盘上限触发后(WAV 截断但转写继续累积),finalize 应走 finalize_live
     保留直播转写,而非排队精修(精修会用截断 WAV 覆盖转写,丢失超限部分)。"""
