@@ -190,6 +190,15 @@ def create_app() -> FastAPI:
     if os.path.isfile(dist_index):
         from fastapi.responses import FileResponse
 
+        def _spa_index_response() -> FileResponse:
+            return FileResponse(
+                dist_index,
+                headers={
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                },
+            )
+
         # Vue build 产物 /assets/* 走独立 mount, 不被 SPA catch-all 兜
         if os.path.isdir(dist_assets):
             app.mount("/assets", StaticFiles(directory=dist_assets), name="spa-assets")
@@ -197,7 +206,7 @@ def create_app() -> FastAPI:
 
         @app.get("/", include_in_schema=False)
         async def spa_index() -> FileResponse:
-            return FileResponse(dist_index)
+            return _spa_index_response()
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def spa_catch_all(full_path: str) -> FileResponse:
@@ -207,7 +216,7 @@ def create_app() -> FastAPI:
             spa_prefixes = ("live", "meetings", "people", "settings", "login", "tasks")
             first = full_path.split("/")[0] if full_path else ""
             if not full_path or first in spa_prefixes:
-                return FileResponse(dist_index)
+                return _spa_index_response()
             raise HTTPException(status_code=404, detail="Not Found")
 
         logger.info(f"🟢 SPA 已挂载: / → {dist_index}")
