@@ -173,3 +173,83 @@ def test_saving_settings_clears_probe_without_testing(monkeypatch):
 
     assert response.status_code == 200
     assert app.state.llm_probe_result is None
+
+
+def test_llm_models_lists_openai_compatible_models(monkeypatch):
+    monkeypatch.setenv("TEST_AUTH_BYPASS", "1")
+    monkeypatch.setattr(
+        llm_api,
+        "_env_llm_cfg",
+        lambda: LLMConfig(
+            enabled=False,
+            endpoint="http://127.0.0.1:11434/v1",
+            model="test-model",
+        ),
+    )
+
+    async def fake_get_json(_gateway, url, _cfg):
+        assert url == "http://127.0.0.1:11434/v1/models"
+        return {"data": [{"id": "qwen2.5:1.5b"}, {"id": "deepseek-r1:7b"}]}
+
+    monkeypatch.setattr(llm_api, "_get_json_with_llm_guard", fake_get_json)
+    response = TestClient(_llm_app()).get("/v1/llm/models")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [
+        "deepseek-r1:7b",
+        "qwen2.5:1.5b",
+    ]
+
+
+def test_llm_models_falls_back_to_ollama_tags(monkeypatch):
+    monkeypatch.setenv("TEST_AUTH_BYPASS", "1")
+    monkeypatch.setattr(
+        llm_api,
+        "_env_llm_cfg",
+        lambda: LLMConfig(
+            enabled=False,
+            endpoint="http://127.0.0.1:11434/v1",
+            model="test-model",
+        ),
+    )
+    calls = []
+
+    async def fake_get_json(_gateway, url, _cfg):
+        calls.append(url)
+        if url.endswith("/v1/models"):
+            return {"data": []}
+        return {"models": [{"name": "qwen2.5:7b"}, {"model": "glm4:9b"}]}
+
+    monkeypatch.setattr(llm_api, "_get_json_with_llm_guard", fake_get_json)
+    response = TestClient(_llm_app()).get(
+        "/v1/llm/models", params={"provider": "ollama"}
+    )
+
+    assert response.status_code == 200
+    assert calls == [
+        "http://127.0.0.1:11434/v1/models",
+        "http://127.0.0.1:11434/api/tags",
+    ]
+    assert [item["id"] for item in response.json()["items"]] == [
+        "glm4:9b",
+        "qwen2.5:7b",
+    ]
+
+
+def test_llm_models_rejects_unsafe_endpoint(monkeypatch):
+    monkeypatch.setenv("TEST_AUTH_BYPASS", "1")
+    monkeypatch.setattr(
+        llm_api,
+        "_env_llm_cfg",
+        lambda: LLMConfig(
+            enabled=False,
+            endpoint="https://8.8.8.8/v1",
+            model="test-model",
+        ),
+    )
+
+    response = TestClient(_llm_app()).get("/v1/llm/models")
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    assert response.json()["source"] == "security"

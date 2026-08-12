@@ -55,6 +55,16 @@ export async function saveLlmSettings(data: LlmSettingsPayload) {
   })
 }
 
+export interface LlmModelList {
+  items: Array<{ id: string; label: string }>
+  source: string
+  error?: string | null
+}
+
+export async function listLlmModels(params?: { provider?: string; endpoint?: string; allow_public?: boolean }) {
+  return call<LlmModelList>({ url: '/v1/llm/models', params })
+}
+
 export interface LlmPrompts {
   summarize: string
   action_items: string

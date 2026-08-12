@@ -5,8 +5,10 @@ import os
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Request
+import httpx
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import LLMConfig
@@ -204,6 +206,120 @@ class LLMSettingsRequest(BaseModel):
         if not value:
             raise ValueError("不能为空")
         return value
+
+
+def _ollama_tags_url(endpoint: str) -> str:
+    parsed = urlparse(endpoint)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}/api/tags"
+
+
+def _extract_openai_model_ids(payload: object) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return []
+    ids: list[str] = []
+    for item in data:
+        model_id = item.get("id") if isinstance(item, dict) else item
+        if isinstance(model_id, str) and model_id.strip():
+            ids.append(model_id.strip())
+    return sorted(dict.fromkeys(ids), key=str.lower)
+
+
+def _extract_ollama_model_ids(payload: object) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("models")
+    if not isinstance(data, list):
+        return []
+    ids: list[str] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("name") or item.get("model")
+        if isinstance(model_id, str) and model_id.strip():
+            ids.append(model_id.strip())
+    return sorted(dict.fromkeys(ids), key=str.lower)
+
+
+async def _get_json_with_llm_guard(gateway: LLMGateway, url: str, cfg: LLMConfig) -> object:
+    headers = {}
+    if cfg.api_key:
+        headers["Authorization"] = f"Bearer {cfg.api_key}"
+    gateway._assert_no_dns_rebind()
+    pinned_ip = gateway._resolve_pinned_ip(url)
+    async with gateway._dns_pin_guard(url, pinned_ip):
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+            resp = await client.get(url, headers=headers)
+    if 300 <= resp.status_code < 400:
+        raise EndpointSecurityError("LLM endpoint returned redirect")
+    resp.raise_for_status()
+    return resp.json()
+
+
+@router.get("/v1/llm/models")
+async def llm_models(
+    request: Request,
+    provider_override: str | None = Query(None, alias="provider", max_length=40),
+    endpoint: str | None = Query(None, max_length=500),
+    allow_public: bool | None = Query(None),
+):
+    """List model ids from the configured LLM endpoint on explicit request."""
+    cfg, _source, saved_provider = _effective_llm_cfg(_settings_repo(request))
+    if endpoint is not None:
+        endpoint = endpoint.strip().rstrip("/")
+        if not endpoint.startswith(("http://", "https://")):
+            raise HTTPException(status_code=422, detail="endpoint 必须以 http:// 或 https:// 开头")
+        cfg = replace(cfg, endpoint=endpoint)
+    if allow_public is not None:
+        cfg = replace(cfg, allow_public=allow_public)
+    provider = provider_override or saved_provider
+    try:
+        gateway = LLMGateway(replace(cfg, enabled=True, mock=False))
+    except EndpointSecurityError:
+        return {
+            "items": [],
+            "source": "security",
+            "error": "LLM endpoint 配置不安全，默认只允许本机或内网地址",
+        }
+
+    attempts: list[tuple[str, str]] = [
+        ("openai-compatible", f"{cfg.endpoint.rstrip('/')}/models")
+    ]
+    if (provider or "").lower() == "ollama" or urlparse(cfg.endpoint).port == 11434:
+        ollama_url = _ollama_tags_url(cfg.endpoint)
+        if ollama_url:
+            attempts.append(("ollama-api", ollama_url))
+
+    last_error = None
+    for source, url in attempts:
+        try:
+            payload = await _get_json_with_llm_guard(gateway, url, cfg)
+            ids = (
+                _extract_ollama_model_ids(payload)
+                if source == "ollama-api"
+                else _extract_openai_model_ids(payload)
+            )
+            if ids:
+                return {
+                    "items": [{"id": item, "label": item} for item in ids],
+                    "source": source,
+                    "error": None,
+                }
+            last_error = f"{source} 未返回模型列表"
+        except EndpointSecurityError:
+            return {
+                "items": [],
+                "source": source,
+                "error": "LLM endpoint 返回重定向或安全校验失败",
+            }
+        except (httpx.TimeoutException, httpx.HTTPError, ValueError) as exc:
+            last_error = f"{source} 模型列表请求失败: {type(exc).__name__}"
+
+    return {"items": [], "source": "none", "error": last_error or "未发现可用模型"}
 
 
 @router.get("/v1/llm/status")

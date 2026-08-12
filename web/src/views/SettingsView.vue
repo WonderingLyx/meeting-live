@@ -2,7 +2,7 @@
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getAsrSettings, getEngines, getModels, saveAsrSettings, switchAsrEngine, switchEngine, testAsrEngine, type AsrInfo, type AsrSettings, type AsrTestResponse, type EngineInfo, type ModelsInfo } from '../api/engines'
-import { getLlmSettings, getLlmStatus, saveLlmSettings, testLlmConnection, getLlmPrompts, saveLlmPrompts, type LlmSettings, type LlmPrompts } from '../api/llm'
+import { getLlmSettings, getLlmStatus, saveLlmSettings, testLlmConnection, getLlmPrompts, saveLlmPrompts, listLlmModels, type LlmSettings, type LlmPrompts } from '../api/llm'
 import { getDiarizationSettings, saveDiarizationSettings, testDiarizationSettings, type DiarizationSettings } from '../api/diarization'
 type LlmResp = Awaited<ReturnType<typeof getLlmStatus>>
 type ErrorRecord = {
@@ -26,11 +26,15 @@ const models = ref<ModelsInfo | null>(null)
 const llm = ref<LlmResp | null>(null)
 const llmSettings = ref<LlmSettings | null>(null)
 const llmPrompts = ref<LlmPrompts | null>(null)
+const llmModelOptions = ref<Array<{ id: string; label: string }>>([])
+const llmModelSource = ref('')
+const llmModelError = ref('')
 const diarization = ref<DiarizationSettings | null>(null)
 const asrSettings = ref<AsrSettings | null>(null)
 const hfToken = ref('')
 const savingLlm = ref(false)
 const savingPrompts = ref(false)
+const loadingLlmModels = ref(false)
 const savingDiarization = ref(false)
 const savingAsrDevice = ref(false)
 const testingDiarization = ref(false)
@@ -200,6 +204,35 @@ const llmProviders = [
 ]
 
 let asrPollTimer: number | null = null
+
+async function refreshLlmModels(showToast = false) {
+  const settings = llmSettings.value
+  if (!settings || loadingLlmModels.value) return
+  try {
+    loadingLlmModels.value = true
+    llmModelError.value = ''
+    const result = await listLlmModels({
+      provider: settings.provider,
+      endpoint: settings.endpoint,
+      allow_public: settings.allow_public,
+    })
+    llmModelOptions.value = result.items || []
+    llmModelSource.value = result.source || ''
+    if (result.error) {
+      llmModelError.value = result.error
+      if (showToast) window.toast?.(`模型列表获取失败: ${result.error}`, 'error')
+    } else if (showToast) {
+      window.toast?.(`已获取 ${llmModelOptions.value.length} 个模型`, 'ok')
+    }
+  } catch (e) {
+    llmModelOptions.value = []
+    llmModelSource.value = ''
+    llmModelError.value = e instanceof Error ? e.message : String(e)
+    if (showToast) window.toast?.(`模型列表获取失败: ${llmModelError.value}`, 'error')
+  } finally {
+    loadingLlmModels.value = false
+  }
+}
 
 async function refreshModels() {
   try {
@@ -418,6 +451,9 @@ function pickLlmProvider(providerKey: string) {
     llmSettings.value.model = preset.model
     llmSettings.value.allow_public = preset.allowPublic
   }
+  llmModelOptions.value = []
+  llmModelSource.value = ''
+  llmModelError.value = ''
 }
 
 async function saveLlmConfig() {
@@ -795,12 +831,23 @@ onUnmounted(() => {
         </label>
         <label>
           <span>Model</span>
-          <input v-model.trim="llmSettings.model" placeholder="qwen2.5:1.5b" />
+          <input v-model.trim="llmSettings.model" list="llm-model-options" placeholder="qwen2.5:1.5b" />
+          <datalist id="llm-model-options">
+            <option v-for="m in llmModelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
+          </datalist>
         </label>
         <label class="full">
           <span>Endpoint</span>
           <input v-model.trim="llmSettings.endpoint" placeholder="http://127.0.0.1:11434/v1" />
         </label>
+        <div class="llm-model-picker">
+          <button class="btn ghost sm" type="button" :disabled="loadingLlmModels" @click="refreshLlmModels(true)">
+            {{ loadingLlmModels ? '读取模型中' : '刷新可选模型' }}
+          </button>
+          <span v-if="llmModelOptions.length">{{ llmModelOptions.length }} 个模型 · {{ llmModelSource || 'endpoint' }}</span>
+          <span v-else-if="llmModelError">{{ llmModelError }}</span>
+          <span v-else>可手动输入，也可从当前 Endpoint 读取</span>
+        </div>
         <div class="llm-secret-note">
           {{ llmSettings.has_api_key ? t('settings.llm.keyFromEnv') : t('settings.llm.keyEnvHint') }}
         </div>
@@ -1105,6 +1152,21 @@ onUnmounted(() => {
   color: var(--text-muted);
   font-size: 0.82rem;
   line-height: 1.5;
+}
+.llm-model-picker {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+  color: var(--text-3);
+  font: 10px var(--mono);
+  overflow-wrap: anywhere;
+}
+.llm-model-picker span {
+  min-width: 0;
+  color: var(--text-3);
 }
 .llm-secret-note.danger {
   margin-top: 8px;

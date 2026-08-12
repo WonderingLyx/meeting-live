@@ -40,10 +40,53 @@ export const updateSegmentText = (meetingId:string,segmentId:number,text:string)
 export const assignSegmentSpeaker = (meetingId:string,segmentIds:number[],speakerId:string|null) => call<{updated:number}>({method:'PATCH',url:`/v1/meetings/${meetingId}/segments/speaker`,data:{segment_ids:segmentIds,meeting_speaker_id:speakerId}})
 export const generateMeetingNote = (meetingId:string,type:'summary'|'minutes'|'actions') => call<MeetingNote>({method:'POST',url:`/v1/meetings/${meetingId}/notes/${type}`})
 export const saveMeetingNote = (meetingId:string,type:string,content:string) => call<MeetingNote>({method:'PUT',url:`/v1/meetings/${meetingId}/notes/${type}`,data:{content}})
+async function audioBlobError(data: unknown, fallback: string) {
+  if (data instanceof Blob) {
+    const text = (await data.text()).trim()
+    if (!text) return fallback
+    try {
+      const parsed = JSON.parse(text) as { detail?: unknown }
+      if (typeof parsed.detail === 'string') return parsed.detail
+      if (parsed.detail != null) return JSON.stringify(parsed.detail)
+    } catch { /* fall through */ }
+    return text.slice(0, 500)
+  }
+  return fallback
+}
+
+function emitAudioApiError(message: string, status?: number) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('app-api-error', {
+    detail: {
+      at: new Date().toISOString(),
+      message,
+      method: 'GET',
+      url: '/v1/meetings/:id/audio',
+      status,
+    },
+  }))
+}
+
 export async function getMeetingAudioUrl(id:string) {
-  const r=await apiClient.get(`/v1/meetings/${id}/audio`,{params:{_:Date.now()},responseType:'blob',timeout:0})
-  const type=String(r.headers?.['content-type']||'audio/wav')
+  const r=await apiClient.get(`/v1/meetings/${encodeURIComponent(id)}/audio`,{params:{_:Date.now()},responseType:'blob',timeout:0,validateStatus:()=>true})
+  const type=String(r.headers?.['content-type']||'audio/wav').split(';',1)[0].trim().toLowerCase()
+  if (r.status<200||r.status>=300) {
+    const message=await audioBlobError(r.data,`会议音频请求失败 HTTP ${r.status}`)
+    emitAudioApiError(message,r.status)
+    throw new Error(message)
+  }
   const blob=r.data instanceof Blob&&r.data.type?r.data:new Blob([r.data],{type})
+  const mediaType=(blob.type||type).split(';',1)[0].trim().toLowerCase()
+  if (!blob.size) {
+    const message='会议音频为空，可能录音文件还没有写入完成'
+    emitAudioApiError(message,r.status)
+    throw new Error(message)
+  }
+  if (mediaType&&!mediaType.startsWith('audio/')&&mediaType!=='application/octet-stream') {
+    const message=`会议音频返回了非音频内容: ${mediaType}`
+    emitAudioApiError(message,r.status)
+    throw new Error(message)
+  }
   return URL.createObjectURL(blob)
 }
 export async function uploadMeeting(file:File, mode:'quick'|'meeting', onProgress?:(n:number)=>void) {
