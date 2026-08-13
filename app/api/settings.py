@@ -444,13 +444,20 @@ def _speaker_settings_status(*, switch_result: dict[str, Any] | None = None) -> 
 
         manager = get_engine_manager()
         current = manager.current_type
+        current_engine = getattr(manager, "_current_engine", None)
+        loaded_device = getattr(current_engine, "device", None) if current_engine is not None else None
     except Exception:
         current = config.speaker.engine_type
+        loaded_device = None
     result = {
         **speaker_source,
         "model": speaker_source.get("model") or current,
+        "device": speaker_source.get("device") or os.environ.get("SPEAKER_DEVICE") or "auto",
+        "env_device": os.environ.get("SPEAKER_DEVICE") or _read_env_value("SPEAKER_DEVICE") or "auto",
+        "loaded_device": loaded_device,
         "current": current,
         "config_path": public_settings["config_path"],
+        "device_status": _torch_device_status(),
     }
     if switch_result is not None:
         result["switch_result"] = switch_result
@@ -683,7 +690,7 @@ async def update_speaker_settings(body: SpeakerSettingsRequest, request: Request
     from engine.speaker.speaker_factory import get_engine_manager
 
     manager = get_engine_manager()
-    result = await asyncio.to_thread(manager.switch_engine, model)
+    result = await asyncio.to_thread(manager.switch_engine, model, force_reload=True)
     if not result.get("success"):
         write_model_settings(previous_model_settings)
         apply_model_settings_to_runtime()
@@ -700,6 +707,7 @@ async def update_speaker_settings(body: SpeakerSettingsRequest, request: Request
         _write_env_values(
             {
                 "SPEAKER_ENGINE": result.get("engine_type") or model,
+                "SPEAKER_DEVICE": body.device,
                 "SPEAKER_PROVIDER": body.provider,
                 "SPEAKER_ENDPOINT": body.endpoint or "",
             }

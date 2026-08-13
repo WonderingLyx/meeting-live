@@ -22,18 +22,20 @@ ENGINE_FILES = (
 )
 
 
-def test_live_speaker_engines_use_process_local_chroma() -> None:
-    """匿名实时聚类不得写入跨进程、跨版本的 Chroma 数据库。"""
+def test_live_speaker_engines_use_process_local_vector_store() -> None:
+    """匿名实时聚类不得写入跨进程、跨版本的持久向量库。"""
     for engine_file in ENGINE_FILES:
         source = engine_file.read_text(encoding="utf-8")
-        assert "EphemeralClient" in source, engine_file.name
+        assert "create_runtime_vector_collection" in source, engine_file.name
         assert "PersistentClient" not in source, engine_file.name
 
 
-def test_chroma_telemetry_dependency_is_compatible() -> None:
+def test_chroma_is_optional_for_windows_deployments() -> None:
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
-    assert "chromadb>=0.6.3,<0.7.0" in requirements
+    assert "chromadb" in requirements
     assert "posthog>=2.4.0,<3.0.0" in requirements
+    vector_store = (ROOT / "engine" / "speaker" / "vector_store.py").read_text(encoding="utf-8")
+    assert "InMemoryVectorCollection" in vector_store
 
 
 def test_embedding_model_id_captures_full_compatibility_contract() -> None:
@@ -84,16 +86,15 @@ def test_generic_modelscope_speaker_engine_uses_configured_model(monkeypatch, tm
             calls.append((local, device))
             return FakeLoadedModel()
 
-    class FakeChroma:
-        def get_or_create_collection(self, **kwargs):
-            return kwargs
+    def fake_collection(name):
+        return object(), {"name": name}
 
     monkeypatch.setattr(mod, "Model", FakeModel)
     monkeypatch.setattr(
         "app.services.model_resolver.resolve_modelscope",
         lambda model_id, category, name, revision=None: str(tmp_path / name),
     )
-    monkeypatch.setattr(mod.chromadb, "EphemeralClient", lambda settings=None: FakeChroma())
+    monkeypatch.setattr(mod, "create_runtime_vector_collection", fake_collection)
 
     engine = mod.ModelScopeSpeakerEngine("eres2net_large")
 
@@ -103,6 +104,38 @@ def test_generic_modelscope_speaker_engine_uses_configured_model(monkeypatch, tm
         {"spk_embedding": np.array([[1.0, 2.0, 3.0]], dtype=np.float32)}
     )
     assert vector.tolist() == [1.0, 2.0, 3.0]
+
+
+def test_generic_modelscope_speaker_engine_uses_configured_device(monkeypatch, tmp_path) -> None:
+    from engine.speaker import device as speaker_device
+    from engine.speaker import modelscope_speaker_engine as mod
+
+    calls = []
+
+    class FakeLoadedModel:
+        def eval(self):
+            return None
+
+    class FakeModel:
+        @staticmethod
+        def from_pretrained(local, device="cpu"):
+            calls.append((local, device))
+            return FakeLoadedModel()
+
+    monkeypatch.setenv("SPEAKER_DEVICE", "cuda")
+    monkeypatch.setattr(speaker_device, "torch", None, raising=False)
+    monkeypatch.setattr(mod, "Model", FakeModel)
+    monkeypatch.setattr(mod, "resolve_speaker_device", lambda: "cuda")
+    monkeypatch.setattr(
+        "app.services.model_resolver.resolve_modelscope",
+        lambda model_id, category, name, revision=None: str(tmp_path / name),
+    )
+    monkeypatch.setattr(mod, "create_runtime_vector_collection", lambda name: (object(), {"name": name}))
+
+    engine = mod.ModelScopeSpeakerEngine("eres2net_large")
+
+    assert engine.device == "cuda"
+    assert calls == [(str(tmp_path / "eres2net_large"), "cuda")]
 
 
 def test_repository_never_returns_same_dimension_from_another_model(tmp_path) -> None:

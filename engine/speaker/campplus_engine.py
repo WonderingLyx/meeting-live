@@ -5,8 +5,6 @@ EER: 0.65% (VoxCeleb)
 """
 import numpy as np
 import torch
-import chromadb
-from chromadb.config import Settings
 from modelscope.models import Model
 import time
 import logging
@@ -14,7 +12,9 @@ from collections import defaultdict
 from typing import Optional, Tuple
 
 from engine.speaker.base_engine import BaseSpeakerEngine
+from engine.speaker.device import move_tensor_to_device, resolve_speaker_device
 from engine.speaker.speaker_factory import ENGINE_CONFIG
+from engine.speaker.vector_store import create_runtime_vector_collection
 
 logger = logging.getLogger("Matrix_Speaker")
 
@@ -62,16 +62,12 @@ class CamPlusEngine(BaseSpeakerEngine):
             revision=ENGINE_CONFIG["campplus"]["model_revision"],
         )
         logger.info("[CamPlus] 从本地路径加载: %s", local)
-        self.device = "cpu"
-        self.model = Model.from_pretrained(local, device='cpu')
+        self.device = resolve_speaker_device()
+        self.model = Model.from_pretrained(local, device=self.device)
         self.model.eval()
 
-        self.chroma_client = chromadb.EphemeralClient(
-            settings=Settings(anonymized_telemetry=False)
-        )
-        self.collection = self.chroma_client.get_or_create_collection(
-            name="speaker_fingerprints",
-            metadata={"hnsw:space": "cosine"}
+        self.chroma_client, self.collection = create_runtime_vector_collection(
+            "speaker_fingerprints"
         )
         self.emb_buffer = defaultdict(list)
         self.EMB_BUFFER_SIZE = 5
@@ -89,7 +85,7 @@ class CamPlusEngine(BaseSpeakerEngine):
         try:
             audio_duration = len(audio_data) / 16000.0  # 采样率固定 16kHz
             
-            tensor = torch.FloatTensor(audio_data).unsqueeze(0)
+            tensor = move_tensor_to_device(torch.FloatTensor(audio_data).unsqueeze(0), self.device)
             with torch.no_grad():
                 outputs = self.model(tensor)
                 emb = outputs['spk_embedding'] if isinstance(outputs, dict) else outputs

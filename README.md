@@ -9,7 +9,7 @@
 [![Node](https://img.shields.io/badge/node-20%2B-green.svg)](https://nodejs.org/)
 ![Release](https://img.shields.io/badge/release-v0.2.0--beta-orange.svg)
 
-[English](README.en.md) · [使用说明](docs/USAGE.md) · [LLM 配置](docs/LLM_SETUP.md) · [隐私](docs/PRIVACY.md) · [安全](docs/SECURITY.md) · [API](docs/API.md) · [模型](docs/MODELS.md)
+[English](README.en.md) · [Windows 一键部署](docs/WINDOWS_ONE_CLICK_DEPLOY.md) · [使用说明](docs/USAGE.md) · [LLM 配置](docs/LLM_SETUP.md) · [隐私](docs/PRIVACY.md) · [安全](docs/SECURITY.md) · [API](docs/API.md) · [模型](docs/MODELS.md)
 
 </div>
 
@@ -27,7 +27,7 @@
 ## 核心能力
 
 - 🖥️ **本地优先**：默认全本机推理，下载模型后可在无网环境运行（LLM 关闭时）。
-- 👥 **多人说话人分离**：上传会议模式用 pyannote community-1 切出匿名说话人 turn。
+- 👥 **多人说话人分离**：上传会议模式默认用 FunASR/CAM++ 中文本地分离，也可切 pyannote、sherpa-onnx 或自定义命令。
 - 🧬 **声纹匹配**：把匿名 `Spk_01` 按严格阈值匹配到已登记人物，可随时人工纠正，**不是身份认证**。声样支持**上传文件或浏览器在线录音**注册。
 - 📝 **可校正纪要**：双击改文稿、批量重指说话人、合并/拆分说话人、生成/编辑摘要（LLM 或本地 TextRank 兜底）。
 - 📤 **多格式导出**：Markdown / SRT / VTT / JSON。
@@ -89,6 +89,41 @@
 
 要求 Python 3.10–3.12、Node.js 20+ 和 FFmpeg。CI 在 Ubuntu 验证 Python 3.10–3.12，并在 macOS、Windows 验证 Python 3.12。首次启动会下载约 1.8GB 模型，视网速可能需要数十分钟；下载完成后 LLM 关闭时可永久断网运行。
 
+Windows 新机器推荐直接运行一键部署脚本：
+
+```powershell
+.\install-windows.cmd
+.\start-windows.cmd
+```
+
+AMD ROCm GPU 机器使用：
+
+```powershell
+.\install-windows-amd-gpu.cmd
+```
+
+等价于：
+
+```powershell
+.\install-windows.cmd -Profile AmdRocm
+```
+
+ROCm 下载慢时优先用 `.\install-windows-amd-gpu.cmd -InstallAria2`，或用 `-PrintRocmUrls` 打印链接后离线下载到 `.download-cache\rocm-win-7.2.1`。
+
+NVIDIA CUDA GPU 机器使用：
+
+```powershell
+.\install-windows-nvidia-gpu.cmd
+```
+
+等价于：
+
+```powershell
+.\install-windows.cmd -Profile NvidiaCuda
+```
+
+完整说明见 [Windows 一键部署](docs/WINDOWS_ONE_CLICK_DEPLOY.md)。
+
 ```bash
 git clone https://github.com/lgy1027/matrix-live-diarizer.git
 cd matrix-live-diarizer
@@ -129,9 +164,9 @@ LLM_ENABLED=false
 
 **何时需要 `HF_TOKEN`**（其余情况留空即可）：
 
-- ✅ 要用上传会议的**多人说话人分离**（pyannote community-1，gated 模型）→ 需填，且需在 HF 页面接受条款。
+- ✅ 把上传会议的多人说话人分离切到 **pyannote community-1**（gated 模型）→ 需填，且需在 HF 页面接受条款。
 - ✅ 要启用**字级时间戳**（Qwen3-ForcedAligner）→ 建议填以避开 HF 限流。
-- ❌ 只用实时字幕 / 快速转写 / 本机声纹匹配 → **不需要**。
+- ❌ 使用默认 FunASR/CAM++ 中文分离、实时字幕、快速转写、本机声纹匹配 → **不需要**。
 
 只有明确部署到局域网时才使用 `HOST=0.0.0.0` 和 `DEPLOYMENT_MODE=lan`，并同时设置强随机 `JWT_SECRET`、可信 `ALLOWED_ORIGINS`。跨机器访问还需要 HTTPS（见下文「跨机器访问」）。
 

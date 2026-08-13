@@ -95,6 +95,9 @@ export interface SpeakerSettings {
   api_key_preview?: string | null
   model: string
   device?: string
+  env_device?: string
+  loaded_device?: string | null
+  device_status?: AsrDeviceStatus
   current?: string
   config_path?: string
   config_source?: string

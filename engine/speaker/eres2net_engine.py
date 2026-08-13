@@ -5,15 +5,15 @@ EER: 0.61% (VoxCeleb), 6.14% (CNCeleb)
 """
 import numpy as np
 import torch
-import chromadb
-from chromadb.config import Settings
 from modelscope.models import Model
 import logging
 from collections import defaultdict
 from typing import Tuple
 
 from engine.speaker.base_engine import BaseSpeakerEngine
+from engine.speaker.device import move_tensor_to_device, resolve_speaker_device
 from engine.speaker.speaker_factory import ENGINE_CONFIG
+from engine.speaker.vector_store import create_runtime_vector_collection
 
 logger = logging.getLogger("Matrix_Speaker")
 
@@ -22,7 +22,7 @@ class ERes2NetEngine(BaseSpeakerEngine):
     """ERes2NetV2 声纹引擎 - 继承基类"""
     
     def __init__(self):
-        self.device = "cpu"
+        self.device = resolve_speaker_device()
         logger.info("[ERes2NetV2] 加载模型...")
         from app.services.model_resolver import resolve_modelscope
         model_id = 'iic/speech_eres2netv2_sv_zh-cn_16k-common'
@@ -31,14 +31,10 @@ class ERes2NetEngine(BaseSpeakerEngine):
             revision=ENGINE_CONFIG["eres2net"]["model_revision"],
         )
         logger.info("[ERes2NetV2] 从本地路径加载: %s", local)
-        self.model = Model.from_pretrained(local, device='cpu')
+        self.model = Model.from_pretrained(local, device=self.device)
         self.model.eval()
-        self.chroma_client = chromadb.EphemeralClient(
-            settings=Settings(anonymized_telemetry=False)
-        )
-        self.collection = self.chroma_client.get_or_create_collection(
-            name="speaker_fingerprints_eres2net",
-            metadata={"hnsw:space": "cosine"}
+        self.chroma_client, self.collection = create_runtime_vector_collection(
+            "speaker_fingerprints_eres2net"
         )
         self.emb_buffer = defaultdict(list)
         self.EMB_BUFFER_SIZE = 5
@@ -56,7 +52,7 @@ class ERes2NetEngine(BaseSpeakerEngine):
         try:
             audio_duration = len(audio_data) / 16000.0
             
-            tensor = torch.FloatTensor(audio_data).unsqueeze(0)
+            tensor = move_tensor_to_device(torch.FloatTensor(audio_data).unsqueeze(0), self.device)
             with torch.no_grad():
                 outputs = self.model(tensor)
                 emb = outputs['spk_embedding'] if isinstance(outputs, dict) else outputs

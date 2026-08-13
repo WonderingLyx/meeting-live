@@ -44,6 +44,9 @@ qwen-asr>=0.0.6,<0.1.0
 funasr>=1.2.0,<2.0.0; python_version >= "3.10" and python_version < "3.13"
 
 # 声纹向量库
+# Windows 一键部署脚本默认跳过 ChromaDB,使用 engine/speaker/vector_store.py
+# 的进程内内存向量库兜底,避免 chroma-hnswlib 触发本机 C++ 编译。
+# 需要 ChromaDB 时手动安装本依赖或给 install-windows.ps1 传 -InstallChroma。
 chromadb>=0.6.3,<0.7.0
 # Chroma 0.6 使用旧版 positional capture API；PostHog 3+ 已移除该接口。
 posthog>=2.4.0,<3.0.0

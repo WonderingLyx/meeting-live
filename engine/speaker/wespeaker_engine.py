@@ -5,14 +5,14 @@ EER: 1.05% (VoxCeleb), 6.92% (CNCeleb)
 """
 import numpy as np
 import torch
-import chromadb
-from chromadb.config import Settings
 import logging
 from collections import defaultdict
 from typing import Tuple
 
 from engine.speaker.base_engine import BaseSpeakerEngine
+from engine.speaker.device import move_tensor_to_device, resolve_speaker_device
 from engine.speaker.speaker_factory import ENGINE_CONFIG
+from engine.speaker.vector_store import create_runtime_vector_collection
 
 logger = logging.getLogger("Matrix_Speaker")
 
@@ -21,14 +21,10 @@ class WespeakerEngine(BaseSpeakerEngine):
     """Wespeaker ResNet34 声纹引擎 - 继承基类"""
     
     def __init__(self):
-        self.device = "cpu"
+        self.device = resolve_speaker_device()
         self._init_model()
-        self.chroma_client = chromadb.EphemeralClient(
-            settings=Settings(anonymized_telemetry=False)
-        )
-        self.collection = self.chroma_client.get_or_create_collection(
-            name="speaker_fingerprints_wespeaker",
-            metadata={"hnsw:space": "cosine"}
+        self.chroma_client, self.collection = create_runtime_vector_collection(
+            "speaker_fingerprints_wespeaker"
         )
         self.emb_buffer = defaultdict(list)
         self.EMB_BUFFER_SIZE = 5
@@ -48,7 +44,7 @@ class WespeakerEngine(BaseSpeakerEngine):
             revision=ENGINE_CONFIG["wespeaker"]["model_revision"],
         )
         logger.info("[Wespeaker] 从本地路径加载: %s", local)
-        self.model = Model.from_pretrained(local, device='cpu')
+        self.model = Model.from_pretrained(local, device=self.device)
         self.model.eval()
         logger.info("[Wespeaker] ResNet34 模型加载成功")
 
@@ -61,7 +57,7 @@ class WespeakerEngine(BaseSpeakerEngine):
         try:
             audio_duration = len(audio_data) / 16000.0
             
-            tensor = torch.FloatTensor(audio_data).unsqueeze(0)
+            tensor = move_tensor_to_device(torch.FloatTensor(audio_data).unsqueeze(0), self.device)
             with torch.no_grad():
                 outputs = self.model(tensor)
                 emb = outputs['spk_embedding'] if isinstance(outputs, dict) else outputs

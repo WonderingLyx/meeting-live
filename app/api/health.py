@@ -48,7 +48,7 @@ def readiness_check(request: Request):
             checks["database"] = True
         except Exception as exc:
             logger.warning("readiness database failed: %s", exc)
-    # ChromaDB 声纹库探活:比仅检查 speaker 对象更可靠,损坏时提前 not_ready。
+    # 声纹向量库探活:ChromaDB 或内置内存向量库都实现 count()。
     if checks["speaker"]:
         try:
             coll = getattr(runtime.speaker, "collection", None)

@@ -10,14 +10,14 @@ import logging
 from collections import defaultdict
 from typing import Tuple
 
-import chromadb
 import numpy as np
 import torch
-from chromadb.config import Settings
 from modelscope.models import Model
 
 from engine.speaker.base_engine import BaseSpeakerEngine
+from engine.speaker.device import move_tensor_to_device, resolve_speaker_device
 from engine.speaker.speaker_factory import ENGINE_CONFIG
+from engine.speaker.vector_store import create_runtime_vector_collection
 
 
 logger = logging.getLogger("Matrix_Speaker")
@@ -31,7 +31,7 @@ class ModelScopeSpeakerEngine(BaseSpeakerEngine):
             raise ValueError(f"Unknown ModelScope speaker engine: {engine_type}")
         self.engine_type = engine_type
         self.info = ENGINE_CONFIG[engine_type]
-        self.device = "cpu"
+        self.device = resolve_speaker_device()
         self.THRESHOLD_PROFILE = tuple(
             self.info.get("threshold_profile") or (0.42, 0.52, 0.52, 0.62)
         )
@@ -48,15 +48,11 @@ class ModelScopeSpeakerEngine(BaseSpeakerEngine):
             revision=self.info.get("model_revision"),
         )
         logger.info("[%s] Loading from local path: %s", self._model_name, local)
-        self.model = Model.from_pretrained(local, device="cpu")
+        self.model = Model.from_pretrained(local, device=self.device)
         self.model.eval()
 
-        self.chroma_client = chromadb.EphemeralClient(
-            settings=Settings(anonymized_telemetry=False)
-        )
-        self.collection = self.chroma_client.get_or_create_collection(
-            name=f"speaker_fingerprints_{engine_type}",
-            metadata={"hnsw:space": "cosine"},
+        self.chroma_client, self.collection = create_runtime_vector_collection(
+            f"speaker_fingerprints_{engine_type}"
         )
         self.emb_buffer = defaultdict(list)
         self.EMB_BUFFER_SIZE = 5
@@ -73,7 +69,7 @@ class ModelScopeSpeakerEngine(BaseSpeakerEngine):
         """Extract a normalized speaker embedding from 16 kHz mono PCM."""
         try:
             audio_duration = len(audio_data) / 16000.0
-            tensor = torch.FloatTensor(audio_data).unsqueeze(0)
+            tensor = move_tensor_to_device(torch.FloatTensor(audio_data).unsqueeze(0), self.device)
             with torch.no_grad():
                 outputs = self.model(tensor)
                 final_emb = self._extract_embedding_array(outputs)

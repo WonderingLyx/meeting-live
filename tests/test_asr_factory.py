@@ -11,10 +11,18 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def reset_asr_manager_state():
-    from engine.asr.factory import ASREngineManager
+    from engine.asr import factory
+
+    ASREngineManager = factory.ASREngineManager
     ASREngineManager.reset()
+    factory._CAPABILITY_OVERRIDES_CACHE = None
+    factory._CAPABILITY_OVERRIDES_CACHE_KEY = None
+    factory._CAPABILITY_OVERRIDES_WARNED.clear()
     yield
     ASREngineManager.reset()
+    factory._CAPABILITY_OVERRIDES_CACHE = None
+    factory._CAPABILITY_OVERRIDES_CACHE_KEY = None
+    factory._CAPABILITY_OVERRIDES_WARNED.clear()
 
 
 def test_asr_config_engine_default(monkeypatch):
@@ -222,6 +230,32 @@ def test_asr_engine_capabilities_can_be_overridden(monkeypatch):
     assert info["capabilities"]["word_timestamps"] is False
     assert info["capabilities"]["speaker_diarization"] is False
     assert info["capabilities"]["notes"] == "本部署关闭字级时间戳"
+
+
+def test_empty_asr_capabilities_file_is_ignored(monkeypatch, tmp_path, caplog):
+    from engine.asr import factory
+
+    config_path = tmp_path / "empty-asr-capabilities.json"
+    config_path.write_text("   \n", encoding="utf-8")
+    monkeypatch.setenv("ASR_CAPABILITIES_FILE", str(config_path))
+
+    with caplog.at_level("WARNING", logger="ASR_Engine"):
+        assert factory.get_asr_engine_info("qwen3")["customized"] is False
+        assert factory.get_asr_engine_info("sensevoice_zh")["customized"] is False
+
+    assert "ASR capabilities JSON" not in caplog.text
+
+
+def test_invalid_asr_capabilities_warns_once(monkeypatch, caplog):
+    from engine.asr import factory
+
+    monkeypatch.setenv("ASR_CAPABILITIES_JSON", "not-json")
+    with caplog.at_level("WARNING", logger="ASR_Engine"):
+        factory.get_asr_engine_info("qwen3")
+        factory.get_asr_engine_info("sensevoice_zh")
+        factory.get_asr_engine_info("paraformer_full")
+
+    assert caplog.text.count("ASR capabilities JSON") == 1
 
 
 def test_asr_manager_switch_success_after_load(monkeypatch):

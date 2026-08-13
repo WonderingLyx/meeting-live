@@ -25,6 +25,10 @@ from .plugin_engine import (
 
 logger = logging.getLogger("ASR_Engine")
 
+_CAPABILITY_OVERRIDES_CACHE: dict[str, Any] | None = None
+_CAPABILITY_OVERRIDES_CACHE_KEY: tuple[str, str] | None = None
+_CAPABILITY_OVERRIDES_WARNED: set[str] = set()
+
 
 ASR_ENGINE_CONFIG: dict[str, dict[str, Any]] = {
     "qwen3": {
@@ -390,26 +394,59 @@ def _load_capability_overrides() -> dict[str, Any]:
     - ASR_CAPABILITIES_JSON='{"qwen3": {"capabilities": {"word_timestamps": false}}}'
     - ASR_CAPABILITIES_FILE='./config/asr_capabilities.json'
     """
+    global _CAPABILITY_OVERRIDES_CACHE, _CAPABILITY_OVERRIDES_CACHE_KEY
+
     raw = os.getenv("ASR_CAPABILITIES_JSON", "").strip()
     file_path = os.getenv("ASR_CAPABILITIES_FILE", "").strip()
+    cache_key = (raw, file_path)
+    if _CAPABILITY_OVERRIDES_CACHE_KEY == cache_key and _CAPABILITY_OVERRIDES_CACHE is not None:
+        return _CAPABILITY_OVERRIDES_CACHE
+
     if not raw and file_path:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
-                raw = f.read()
+                raw = f.read().strip()
+                cache_key = (raw, file_path)
         except OSError as e:
-            logger.warning(f"[ASR] 读取 ASR_CAPABILITIES_FILE 失败: {e}")
-            return {}
+            _warn_capability_override_once(
+                f"file:{file_path}",
+                f"[ASR] 读取 ASR_CAPABILITIES_FILE 失败: {e}",
+            )
+            _CAPABILITY_OVERRIDES_CACHE_KEY = cache_key
+            _CAPABILITY_OVERRIDES_CACHE = {}
+            return _CAPABILITY_OVERRIDES_CACHE
     if not raw:
-        return {}
+        _CAPABILITY_OVERRIDES_CACHE_KEY = cache_key
+        _CAPABILITY_OVERRIDES_CACHE = {}
+        return _CAPABILITY_OVERRIDES_CACHE
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
-        logger.warning(f"[ASR] ASR capabilities JSON 无效: {e}")
-        return {}
+        _warn_capability_override_once(
+            f"json:{raw[:120]}",
+            f"[ASR] ASR capabilities JSON 无效: {e}",
+        )
+        _CAPABILITY_OVERRIDES_CACHE_KEY = cache_key
+        _CAPABILITY_OVERRIDES_CACHE = {}
+        return _CAPABILITY_OVERRIDES_CACHE
     if not isinstance(data, dict):
-        logger.warning("[ASR] ASR capabilities override 必须是 object")
-        return {}
-    return data
+        _warn_capability_override_once(
+            f"type:{type(data).__name__}",
+            "[ASR] ASR capabilities override 必须是 object",
+        )
+        _CAPABILITY_OVERRIDES_CACHE_KEY = cache_key
+        _CAPABILITY_OVERRIDES_CACHE = {}
+        return _CAPABILITY_OVERRIDES_CACHE
+    _CAPABILITY_OVERRIDES_CACHE_KEY = cache_key
+    _CAPABILITY_OVERRIDES_CACHE = data
+    return _CAPABILITY_OVERRIDES_CACHE
+
+
+def _warn_capability_override_once(key: str, message: str) -> None:
+    if key in _CAPABILITY_OVERRIDES_WARNED:
+        return
+    _CAPABILITY_OVERRIDES_WARNED.add(key)
+    logger.warning(message)
 
 
 def _engine_info_with_overrides(engine_type: str) -> dict[str, Any]:

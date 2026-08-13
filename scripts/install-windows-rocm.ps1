@@ -16,6 +16,12 @@ param(
     [string[]]$PipIndexUrls = @(),
     [string[]]$NpmRegistries = @(),
     [string]$HfEndpoint = "",
+    [string]$Proxy = "",
+    [string]$Aria2cExe = "",
+    [int]$Aria2Connections = 16,
+    [string]$Aria2LowestSpeedLimit = "20K",
+    [switch]$InstallAria2,
+    [switch]$PrintRocmUrls,
     [switch]$StartServer
 )
 
@@ -76,8 +82,57 @@ function Normalize-CommandPath($Value) {
     return $Value.Trim().Trim("'").Trim('"')
 }
 
+function Resolve-Aria2cPath {
+    $candidate = Normalize-CommandPath $Aria2cExe
+    if ($candidate) {
+        if (Test-Path -LiteralPath $candidate) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+        $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($cmd) {
+            return $cmd.Source
+        }
+        throw "aria2c not found: $candidate"
+    }
+
+    $existing = Get-Command "aria2c.exe" -ErrorAction SilentlyContinue
+    if ($existing) {
+        return $existing.Source
+    }
+
+    if ($InstallAria2) {
+        $winget = Get-Command "winget" -ErrorAction SilentlyContinue
+        if (-not $winget) {
+            Write-Warn "winget not found; install aria2 manually or pass -Aria2cExe C:\Path\aria2c.exe."
+            return ""
+        }
+        Write-Warn "Installing aria2 with winget for faster resumable ROCm downloads."
+        Invoke-External $winget.Source @(
+            "install", "-e", "--id", "aria2.aria2",
+            "--source", "winget",
+            "--accept-package-agreements",
+            "--accept-source-agreements"
+        ) "aria2 installation failed"
+        $installed = Get-Command "aria2c.exe" -ErrorAction SilentlyContinue
+        if ($installed) {
+            return $installed.Source
+        }
+        Write-Warn "aria2 was installed but aria2c.exe is not on PATH yet; restart PowerShell or pass -Aria2cExe."
+    }
+    return ""
+}
+
 function Resolve-ProjectRoot {
-    $scriptDir = Split-Path -Parent $MyInvocation.ScriptName
+    $scriptDir = $PSScriptRoot
+    if (-not $scriptDir -and $PSCommandPath) {
+        $scriptDir = Split-Path -Parent $PSCommandPath
+    }
+    if (-not $scriptDir -and $MyInvocation.MyCommand.Path) {
+        $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    if (-not $scriptDir) {
+        throw "Unable to resolve installer script directory."
+    }
     return (Resolve-Path (Join-Path $scriptDir "..")).Path
 }
 
@@ -181,6 +236,26 @@ function Resolve-InstallerMirrors {
     Write-Host "npm registries: $($script:ResolvedNpmRegistries -join ', ')"
     if ($script:ResolvedHfEndpoint) {
         Write-Host "Hugging Face endpoint: $script:ResolvedHfEndpoint"
+    }
+
+    $script:ResolvedDownloadProxy = Normalize-CommandPath $Proxy
+    if (-not $script:ResolvedDownloadProxy) {
+        $script:ResolvedDownloadProxy = Normalize-CommandPath ($env:HTTPS_PROXY)
+    }
+    if (-not $script:ResolvedDownloadProxy) {
+        $script:ResolvedDownloadProxy = Normalize-CommandPath ($env:HTTP_PROXY)
+    }
+    if ($script:ResolvedDownloadProxy) {
+        Write-Host "download proxy: $script:ResolvedDownloadProxy"
+    }
+
+    $script:ResolvedAria2cPath = Resolve-Aria2cPath
+    if ($script:ResolvedAria2cPath) {
+        Write-Host "ROCm downloader: aria2c ($script:ResolvedAria2cPath), connections=$Aria2Connections"
+    } elseif (Get-Command "curl.exe" -ErrorAction SilentlyContinue) {
+        Write-Host "ROCm downloader: curl.exe"
+    } else {
+        Write-Host "ROCm downloader: PowerShell fallback"
     }
 }
 
@@ -331,15 +406,10 @@ function Ensure-MSVCBuildTools($InstallIfMissing) {
             Write-Ok "Microsoft C++ Build Tools installed."
             return
         }
+        throw "Microsoft C++ Build Tools installation finished, but the C++ toolchain was not detected. Restart PowerShell and rerun the script, or install the C++ workload manually."
     }
-    throw @"
-Microsoft C++ Build Tools are required to build chroma-hnswlib on Windows/Python 3.12.
-Install them, then rerun this script:
-
-winget install -e --id Microsoft.VisualStudio.2022.BuildTools --source winget --accept-package-agreements --accept-source-agreements --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-
-Or rerun this script with -InstallBuildTools.
-"@
+    Write-Warn "Microsoft C++ Build Tools not detected; continuing. Default Windows install skips native ChromaDB/pyannote packages and uses the built-in memory vector store."
+    Write-Warn "Install Build Tools only when you deliberately enable optional packages that compile native Windows wheels."
 }
 
 function Test-VenvPython($PythonPath) {
@@ -421,7 +491,20 @@ function Test-RocmTorchReady($Python) {
 
 function Get-RemoteContentLength($Url) {
     try {
-        $response = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -TimeoutSec 30
+        $iwrArgs = @{
+            Uri = $Url
+            Method = "Head"
+            UseBasicParsing = $true
+            TimeoutSec = 30
+        }
+        if ($script:ResolvedDownloadProxy) {
+            $iwrArgs.Proxy = $script:ResolvedDownloadProxy
+        }
+        $response = Invoke-WebRequest @iwrArgs
+        $contentType = [string]($response.Headers["Content-Type"] | Select-Object -First 1)
+        if ($contentType -match "text/html") {
+            return -1
+        }
         $length = $response.Headers["Content-Length"]
         if ($length) {
             return [int64]($length | Select-Object -First 1)
@@ -431,9 +514,35 @@ function Get-RemoteContentLength($Url) {
     return 0
 }
 
+function Test-RemoteArtifactUrl($Url) {
+    $length = Get-RemoteContentLength $Url
+    if ($length -lt 0) {
+        return @{
+            Ok = $false
+            Length = 0
+            Reason = "remote returned HTML, not an artifact"
+        }
+    }
+    if ($length -gt 0 -and $length -lt 1MB) {
+        return @{
+            Ok = $false
+            Length = $length
+            Reason = "remote artifact is suspiciously small ($length bytes)"
+        }
+    }
+    return @{
+        Ok = $true
+        Length = $length
+        Reason = ""
+    }
+}
+
 function Invoke-RetryingDownload($Url, $Destination, [int64]$ExpectedLength) {
     $tempPath = "$Destination.part"
     $methods = @()
+    if ($script:ResolvedAria2cPath) {
+        $methods += @{ Name = "aria2c"; Kind = "aria2"; Path = $script:ResolvedAria2cPath }
+    }
     $curl = Get-Command "curl.exe" -ErrorAction SilentlyContinue
     if ($curl) {
         $methods += @{ Name = "curl.exe"; Kind = "curl"; Path = $curl.Source }
@@ -453,18 +562,43 @@ function Invoke-RetryingDownload($Url, $Destination, [int64]$ExpectedLength) {
                 }
                 if (Test-Path -LiteralPath $tempPath) {
                     $partialLength = (Get-Item -LiteralPath $tempPath).Length
+                    $canResumePartial = $method.Kind -in @("aria2", "curl")
                     if ($ExpectedLength -gt 0 -and $partialLength -gt $ExpectedLength) {
                         Write-Warn "Partial file is larger than remote size. Restarting this artifact download."
                         Remove-Item -LiteralPath $tempPath -Force
-                    } elseif ($method.Kind -ne "curl") {
-                        Write-Warn ("Keeping partial file for curl resume; skipping {0} because it cannot resume." -f $method.Name)
+                    } elseif (-not $canResumePartial) {
+                        Write-Warn ("Keeping partial file for resumable downloader; skipping {0} because it cannot resume." -f $method.Name)
                         continue
                     } elseif ($partialLength -gt 0) {
                         Write-Host ("Resuming partial download: {0:N1} MB" -f ($partialLength / 1MB))
                     }
                 }
                 Write-Host ("Downloading with {0} (attempt {1}/4)" -f $method.Name, $attempt)
-                if ($method.Kind -eq "curl") {
+                if ($method.Kind -eq "aria2") {
+                    $connections = [Math]::Max(1, [Math]::Min(32, $Aria2Connections))
+                    $ariaArgs = @(
+                        "--continue=true",
+                        "--max-connection-per-server=$connections",
+                        "--split=$connections",
+                        "--min-split-size=1M",
+                        "--retry-wait=2",
+                        "--max-tries=10",
+                        "--timeout=60",
+                        "--connect-timeout=30",
+                        "--summary-interval=5",
+                        "--lowest-speed-limit=$Aria2LowestSpeedLimit",
+                        "--file-allocation=none",
+                        "--allow-overwrite=true",
+                        "--auto-file-renaming=false",
+                        "--dir", (Split-Path -Parent $tempPath),
+                        "--out", (Split-Path -Leaf $tempPath)
+                    )
+                    if ($script:ResolvedDownloadProxy) {
+                        $ariaArgs += "--all-proxy=$script:ResolvedDownloadProxy"
+                    }
+                    $ariaArgs += $Url
+                    Invoke-External $method.Path $ariaArgs "aria2c download failed"
+                } elseif ($method.Kind -eq "curl") {
                     $curlArgs = @(
                         "--fail",
                         "--location",
@@ -475,14 +609,30 @@ function Invoke-RetryingDownload($Url, $Destination, [int64]$ExpectedLength) {
                         "--output", $tempPath,
                         $Url
                     )
+                    if ($script:ResolvedDownloadProxy) {
+                        $curlArgs = @("--proxy", $script:ResolvedDownloadProxy) + $curlArgs
+                    }
                     Invoke-External $method.Path $curlArgs "curl.exe download failed"
                 } elseif ($method.Kind -eq "bits") {
+                    if ($script:ResolvedDownloadProxy) {
+                        Write-Warn "BITS does not use the script proxy parameter reliably; skipping BITS while proxy is set."
+                        continue
+                    }
                     Start-BitsTransfer -Source $Url -Destination $tempPath -ErrorAction Stop
                 } else {
                     $oldProgress = $ProgressPreference
                     try {
                         $script:ProgressPreference = "SilentlyContinue"
-                        Invoke-WebRequest -Uri $Url -OutFile $tempPath -UseBasicParsing -TimeoutSec 3600
+                        $iwrArgs = @{
+                            Uri = $Url
+                            OutFile = $tempPath
+                            UseBasicParsing = $true
+                            TimeoutSec = 3600
+                        }
+                        if ($script:ResolvedDownloadProxy) {
+                            $iwrArgs.Proxy = $script:ResolvedDownloadProxy
+                        }
+                        Invoke-WebRequest @iwrArgs
                     } finally {
                         $script:ProgressPreference = $oldProgress
                     }
@@ -548,8 +698,9 @@ function Save-ArtifactIfNeeded($Artifact, $CacheDir) {
     $sourceUrls = Get-ArtifactUrls $Artifact
     $remoteLength = 0
     foreach ($url in $sourceUrls) {
-        $remoteLength = Get-RemoteContentLength $url
-        if ($remoteLength -gt 0) {
+        $probe = Test-RemoteArtifactUrl $url
+        if ($probe.Ok -and $probe.Length -gt 0) {
+            $remoteLength = [int64]$probe.Length
             break
         }
     }
@@ -571,17 +722,23 @@ function Save-ArtifactIfNeeded($Artifact, $CacheDir) {
             Remove-Item -LiteralPath $target -Force
         }
     }
-    if (Test-ArtifactFile $partial $remoteLength) {
+    if ($remoteLength -gt 0 -and (Test-ArtifactFile $partial $remoteLength)) {
         Write-Ok "Promoting completed partial download: $($Artifact.File)"
         Move-Item -LiteralPath $partial -Destination $target -Force
         return $target
+    } elseif ((Test-Path -LiteralPath $partial) -and $remoteLength -le 0) {
+        Write-Warn "Remote size is unknown; keeping partial file for resumable downloader instead of treating it as complete."
     }
 
     Write-Host "Downloading $($Artifact.File)"
     $lastError = ""
     foreach ($url in $sourceUrls) {
         try {
-            $length = Get-RemoteContentLength $url
+            $probe = Test-RemoteArtifactUrl $url
+            if (-not $probe.Ok) {
+                throw $probe.Reason
+            }
+            $length = [int64]$probe.Length
             Invoke-RetryingDownload $url $target $length
             if (-not (Test-ArtifactFile $target $length)) {
                 throw "downloaded artifact failed validation"
@@ -603,6 +760,22 @@ function Save-ArtifactIfNeeded($Artifact, $CacheDir) {
         }
     }
     throw "Download failed for $($Artifact.File). Last error: $lastError"
+}
+
+function Show-RocmDownloadPlan {
+    Write-Host ""
+    Write-Host "ROCm artifact cache:" -ForegroundColor Cyan
+    Write-Host (Join-Path (Resolve-Path ".").Path $WheelCache)
+    Write-Host ""
+    Write-Host "Download these files into that directory, then rerun the installer:" -ForegroundColor Cyan
+    foreach ($artifact in @($RocmRuntimeArtifacts + $TorchArtifacts)) {
+        $urls = Get-ArtifactUrls $artifact
+        Write-Host ""
+        Write-Host $artifact.File
+        foreach ($url in $urls) {
+            Write-Host "  $url"
+        }
+    }
 }
 
 function Invoke-PipInstallWithMirrors($Python, [string[]]$InstallArgs, $Description) {
@@ -643,7 +816,7 @@ function Install-ArtifactGroup($Python, $Artifacts, $CacheDir, $Description, $Fo
 
 function Test-ProjectDepsReady($Python) {
     try {
-        $code = "import importlib.util; mods=['uvicorn','fastapi','chromadb','qwen_asr','funasr','pyannote.audio']; missing=[m for m in mods if importlib.util.find_spec(m) is None]; print(','.join(missing)); raise SystemExit(1 if missing else 0)"
+        $code = "import importlib.util; mods=['uvicorn','fastapi','qwen_asr','funasr','modelscope','librosa','soundfile']; missing=[m for m in mods if importlib.util.find_spec(m) is None]; print(','.join(missing)); raise SystemExit(1 if missing else 0)"
         $missing = & $Python -c $code 2>$null
         if ($LASTEXITCODE -eq 0) {
             return $true
@@ -663,7 +836,7 @@ function Install-ProjectDeps($Python, $Force) {
     }
     $tempRequirements = Join-Path $env:TEMP "matrix-live-diarizer-requirements-no-torch.txt"
     Get-Content -LiteralPath "requirements.txt" -Encoding UTF8 |
-        Where-Object { $_ -notmatch "^\s*(torch|torchaudio|torchvision)==" } |
+        Where-Object { $_ -notmatch "^\s*(torch|torchaudio|torchvision|chromadb|chroma-hnswlib|pyannote\.audio)([=<>!~ ;]|$)" } |
         Set-Content -LiteralPath $tempRequirements -Encoding UTF8
     Invoke-PipInstallWithMirrors $Python @("install", "-r", $tempRequirements) "Failed to install project dependencies"
     Invoke-External $Python @("-m", "pip", "check") "pip check failed"
@@ -696,11 +869,93 @@ function Ensure-EnvConfig {
     Set-EnvFileValue ".env" "ASR_ENGINE" "qwen3"
     Set-EnvFileValue ".env" "ASR_DEVICE" "cuda"
     Set-EnvFileValue ".env" "ASR_LOAD_TIMEOUT_SEC" "3600"
+    Set-EnvFileValue ".env" "SPEAKER_ENGINE" "campplus"
+    Set-EnvFileValue ".env" "SPEAKER_DEVICE" "cuda"
+    Set-EnvFileValue ".env" "SPEAKER_VECTOR_STORE" "memory"
+    Set-EnvFileValue ".env" "DIARIZATION_ENGINE" "funasr_campplus"
+    Set-EnvFileValue ".env" "DIARIZATION_PROVIDER" "modelscope"
+    Set-EnvFileValue ".env" "DIARIZATION_ENDPOINT" "https://modelscope.cn"
+    Set-EnvFileValue ".env" "DIARIZATION_MODEL" "paraformer-zh + fsmn-vad + ct-punc + cam++"
+    Set-EnvFileValue ".env" "PYANNOTE_DEVICE" "cuda"
     Set-EnvFileValue ".env" "HF_HUB_DISABLE_XET" "1"
     if ($script:ResolvedHfEndpoint) {
         Set-EnvFileValue ".env" "HF_ENDPOINT" $script:ResolvedHfEndpoint
     }
     Set-EnvFileValue ".env" "PYANNOTE_ROCM_DISABLE_LSTM_DROPOUT" "1"
+}
+
+function Ensure-ModelSettings {
+    New-Item -ItemType Directory -Force -Path "config" | Out-Null
+    $path = "config\model-settings.json"
+    if (Test-Path -LiteralPath $path) {
+        try {
+            $settings = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+            Set-JsonProperty (Ensure-JsonObjectProperty $settings "asr") "device" "cuda"
+            Set-JsonProperty (Ensure-JsonObjectProperty $settings "speaker") "device" "cuda"
+            Set-JsonProperty (Ensure-JsonObjectProperty $settings "diarization") "device" "cuda"
+            $settings | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+            Write-Ok "Updated $path devices for AMD GPU"
+        } catch {
+            Write-Warn "Existing model settings could not be updated for AMD GPU: $($_.Exception.Message)"
+        }
+        return
+    }
+    $settings = [ordered]@{
+        version = 1
+        asr = [ordered]@{
+            provider = "modelscope"
+            endpoint = "https://modelscope.cn"
+            api_key = ""
+            model = "qwen3"
+            device = "cuda"
+            word_timestamps = $false
+            load_timeout_sec = 3600
+        }
+        speaker = [ordered]@{
+            provider = "modelscope"
+            endpoint = "https://modelscope.cn"
+            api_key = ""
+            model = "campplus"
+            device = "cuda"
+        }
+        diarization = [ordered]@{
+            engine = "funasr_campplus"
+            provider = "modelscope"
+            endpoint = "https://modelscope.cn"
+            api_key = ""
+            model = "paraformer-zh + fsmn-vad + ct-punc + cam++"
+            command = ""
+            device = "cuda"
+        }
+        llm = [ordered]@{
+            provider = "ollama"
+            endpoint = "http://127.0.0.1:11434/v1"
+            api_key = ""
+            model = "qwen2.5:1.5b"
+            enabled = $false
+            allow_public = $false
+            timeout_sec = 180
+            max_input_tokens = 8000
+            mock = $false
+        }
+    }
+    $settings | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+    Write-Ok "Created $path"
+}
+
+function Ensure-JsonObjectProperty($Object, [string]$Name) {
+    if (-not $Object.PSObject.Properties[$Name]) {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue ([pscustomobject]@{})
+    }
+    return $Object.$Name
+}
+
+function Set-JsonProperty($Object, [string]$Name, $Value) {
+    if ($Object.PSObject.Properties[$Name]) {
+        $Object.$Name = $Value
+    } else {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+    }
 }
 
 function Invoke-NpmInstallWithMirrors($Npm) {
@@ -746,6 +1001,77 @@ function Ensure-FrontendBuild($Force, $Skip) {
     }
 }
 
+function Write-StartScripts {
+    $defaultVenv = $VenvPath
+    $launcher = @"
+param(
+    [string]`$VenvPath = "$defaultVenv",
+    [string]`$Url = "http://127.0.0.1:8000",
+    [switch]`$NoBrowser
+)
+
+`$ErrorActionPreference = "Stop"
+
+`$Root = `$PSScriptRoot
+if (-not `$Root -and `$PSCommandPath) {
+    `$Root = Split-Path -Parent `$PSCommandPath
+}
+if (-not `$Root -and `$MyInvocation.MyCommand.Path) {
+    `$Root = Split-Path -Parent `$MyInvocation.MyCommand.Path
+}
+if (-not `$Root) {
+    throw "Unable to resolve project directory."
+}
+
+`$candidateVenvs = @()
+if (`$VenvPath) {
+    `$candidateVenvs += `$VenvPath
+}
+`$candidateVenvs += @(".venv-rocm-win", ".venv-win")
+
+`$seen = @{}
+`$Python = `$null
+foreach (`$candidate in `$candidateVenvs) {
+    if (-not `$candidate -or `$seen.ContainsKey(`$candidate)) {
+        continue
+    }
+    `$seen[`$candidate] = `$true
+    `$candidatePython = Join-Path `$Root (Join-Path `$candidate "Scripts\python.exe")
+    if (Test-Path -LiteralPath `$candidatePython) {
+        `$Python = `$candidatePython
+        break
+    }
+}
+
+if (-not `$Python) {
+    throw "Python environment not found. Run .\install-windows.cmd first, or pass -VenvPath .venv-rocm-win."
+}
+
+Set-Location `$Root
+`$env:HF_HUB_DISABLE_XET = "1"
+
+if (-not `$NoBrowser) {
+    Start-Job -ScriptBlock {
+        param(`$TargetUrl)
+        for (`$i = 0; `$i -lt 60; `$i++) {
+            try {
+                `$response = Invoke-WebRequest -Uri `$TargetUrl -UseBasicParsing -TimeoutSec 2
+                if (`$response.StatusCode -ge 200 -and `$response.StatusCode -lt 500) {
+                    Start-Process `$TargetUrl
+                    return
+                }
+            } catch {
+            }
+            Start-Sleep -Seconds 1
+        }
+    } -ArgumentList `$Url | Out-Null
+}
+
+& `$Python "main.py"
+"@
+    Set-Content -LiteralPath "start-windows.ps1" -Value $launcher -Encoding UTF8
+}
+
 function Verify-RocmPyTorch($Python) {
     $code = "import torch; print('torch=', torch.__version__); print('hip=', torch.version.hip); print('gpu_available=', torch.cuda.is_available()); print('device=', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"
     Invoke-External $Python @("-c", $code) "ROCm PyTorch verification failed"
@@ -757,6 +1083,10 @@ try {
     Set-Location $ProjectRoot
     Initialize-InstallLog
     Resolve-InstallerMirrors
+    if ($PrintRocmUrls) {
+        Show-RocmDownloadPlan
+        return
+    }
 
     Write-Step "Checking AMD GPU"
     Assert-AMDGraphics $SkipGpuCheck
@@ -779,7 +1109,7 @@ try {
         Test-RocmTorchReady $VenvPython
     }
 
-    Write-Step "Checking Microsoft C++ Build Tools"
+    Write-Step "Checking optional Microsoft C++ Build Tools"
     Ensure-MSVCBuildTools $InstallBuildTools
 
     Write-Step "Installing project dependencies"
@@ -787,6 +1117,8 @@ try {
 
     Write-Step "Configuring .env for AMD GPU ASR"
     Ensure-EnvConfig
+    Ensure-ModelSettings
+    Write-StartScripts
 
     Write-Step "Building frontend"
     Ensure-FrontendBuild $ForceFrontendBuild $SkipFrontendBuild

@@ -327,7 +327,7 @@ class SpeakerEngineManager:
 
         return engine
     
-    def switch_engine(self, engine_type: str) -> Dict[str, Any]:
+    def switch_engine(self, engine_type: str, *, force_reload: bool = False) -> Dict[str, Any]:
         """切换引擎"""
         raw_engine_type = str(engine_type or "").lower().strip()
         engine_type = engine_type_for(raw_engine_type) or raw_engine_type.replace("-", "_")
@@ -344,7 +344,7 @@ class SpeakerEngineManager:
                 "engine_type": engine_type
             }
         
-        if engine_type == self._current_type:
+        if engine_type == self._current_type and not force_reload:
             return {
                 "success": True,
                 "engine_type": engine_type,
@@ -356,6 +356,8 @@ class SpeakerEngineManager:
         
         with self._switch_lock:
             try:
+                if force_reload:
+                    self._engine_cache.pop(engine_type, None)
                 new_engine = self._load_engine(engine_type)
                 self._current_engine = new_engine
                 self._current_type = engine_type
@@ -377,6 +379,8 @@ class SpeakerEngineManager:
                     "previous_model_id": previous_model_id,
                     "new_model_id": new_model_id,
                 }
+                if force_reload:
+                    result["reloaded"] = True
                 
                 if model_id_changed:
                     result["warning"] = (
