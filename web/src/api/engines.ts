@@ -119,6 +119,7 @@ export interface ModelConfigResponse {
   supported?: {
     asr?: Record<string, AsrInfo>
     speaker?: Record<string, EngineInfo>
+    diarization?: Record<string, unknown>
     llm_providers?: Array<{ key: string; label: string; endpoint: string }>
   }
 }

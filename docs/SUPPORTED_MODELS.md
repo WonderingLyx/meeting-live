@@ -28,6 +28,17 @@
 | `ecapa_tdnn` | ECAPA-TDNN | `iic/speech_ecapa-tdnn_sv_zh-cn_3dspeaker_16k` | 20.8M / 192d | 经典中文声纹基线 | 适合和 CAM++ / ERes2Net 对照 |
 | `wespeaker` | ResNet34 | `iic/speech_resnet34_sv_zh-cn_3dspeaker_16k` | 6.34M / 256d | 稳定轻量基线 | WeSpeaker 路线 |
 
+## 说话人分离模型
+
+说话人分离负责把完整会议切成“谁在什么时候说话”的时间段，和“声纹模型”不是同一个任务。声纹模型负责把某段声音匹配到已注册人员，分离模型负责先把多人会议分段。
+
+| 设置值 | 显示名 | 上游模型/接口 | 语言/场景 | 依赖 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| `funasr_campplus` | FunASR Paraformer + CAM++ | `paraformer-zh + fsmn-vad + ct-punc + cam++` | 中文会议优先 | `funasr`, `modelscope` | 本地自动下载；无需 Hugging Face gated 授权；属于 ASR 辅助 speaker 标签 |
+| `pyannote_community` | pyannote Community-1 | `pyannote/speaker-diarization-community-1` | 多语种完整录音 | `pyannote.audio`, `HF_TOKEN` | 准确率基线强；需要接受 Hugging Face 模型条款 |
+| `pyannote_custom` | pyannote Custom Pipeline | 自定义 pyannote pipeline/model id | 多语种对照测试 | `pyannote.audio`, `HF_TOKEN` | 用于测试 `pyannote/speaker-diarization-3.1` 等其它 pipeline |
+| `sherpa_onnx_cli` | sherpa-onnx / external CLI | 本地命令输出 JSON 或 RTTM | 取决于本地模型 | 外部命令 | 用来接 sherpa-onnx、3D-Speaker 或其它离线分离程序 |
+
 ## 统一配置文件
 
 设置页保存后会写入 `config/model-settings.json`，模板见 `config/model-settings.example.json`。真实配置文件已加入 `.gitignore`，因为里面可能包含 API key。
@@ -38,5 +49,11 @@
 | --- | --- | --- |
 | `asr` | `provider`, `endpoint`, `api_key`, `model`, `device`, `word_timestamps`, `load_timeout_sec` | ASR 模型源、模型选择和运行设备 |
 | `speaker` | `provider`, `endpoint`, `api_key`, `model`, `device` | 声纹 embedding 模型源和模型选择 |
-| `diarization` | `provider`, `endpoint`, `api_key`, `model`, `device` | pyannote 多人分离模型 |
+| `diarization` | `engine`, `provider`, `endpoint`, `api_key`, `model`, `command`, `device` | 完整会议多人分离模型 |
 | `llm` | `provider`, `endpoint`, `api_key`, `model`, `enabled`, `allow_public`, `timeout_sec`, `max_input_tokens`, `mock` | OpenAI-compatible LLM 配置 |
+
+## 中文会议推荐顺序
+
+1. 先试 `funasr_campplus`：对中文友好，沿用项目已有 FunASR 依赖和 ModelScope 缓存，不需要 HF_TOKEN。
+2. 再试 `pyannote_community`：分离能力强，但需要 Hugging Face gated 模型授权；AMD Windows ROCm 环境下建议先用 CPU 验证。
+3. 需要 ONNX/纯本地命令时用 `sherpa_onnx_cli`：命令里可用 `{input}` 和 `{output}` 占位符，输出 JSON 或 RTTM 即可接入。

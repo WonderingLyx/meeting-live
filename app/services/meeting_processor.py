@@ -486,9 +486,9 @@ class MeetingProcessor:
         时回退到从 audio_path 解码。
         """
         try:
-            from app.services.pyannote_diarization import get_pyannote_diarizer
+            from app.services.pyannote_diarization import get_diarization_engine
 
-            diarizer = get_pyannote_diarizer()
+            diarizer = get_diarization_engine()
             if diarizer.enabled:
                 if audio is not None:
                     turns = diarizer.diarize(

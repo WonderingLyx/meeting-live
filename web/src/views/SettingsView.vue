@@ -3,7 +3,7 @@ import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getAsrSettings, getEngines, getModelConfig, getModels, getSpeakerSettings, saveAsrSettings, saveSpeakerSettings, switchAsrEngine, switchEngine, testAsrEngine, type AsrInfo, type AsrSettings, type AsrTestResponse, type EngineInfo, type ModelConfigResponse, type ModelSourceProvider, type ModelsInfo, type SpeakerSettings } from '../api/engines'
 import { getLlmSettings, getLlmStatus, saveLlmSettings, testLlmConnection, getLlmPrompts, saveLlmPrompts, listLlmModels, type LlmSettings, type LlmPrompts } from '../api/llm'
-import { getDiarizationSettings, saveDiarizationSettings, testDiarizationSettings, type DiarizationSettings } from '../api/diarization'
+import { getDiarizationSettings, saveDiarizationSettings, testDiarizationSettings, type DiarizationSettings, type DiarizationEngineInfo } from '../api/diarization'
 type LlmResp = Awaited<ReturnType<typeof getLlmStatus>>
 type ErrorRecord = {
   id: number
@@ -221,6 +221,16 @@ const sourceProviders = computed(() => modelConfig.value?.providers?.length ? mo
 const asrProviderOptions = computed(() => sourceProviders.value.filter((p) => !p.scope || p.scope.includes('asr')))
 const speakerProviderOptions = computed(() => sourceProviders.value.filter((p) => !p.scope || p.scope.includes('speaker')))
 const diarizationProviderOptions = computed(() => sourceProviders.value.filter((p) => !p.scope || p.scope.includes('diarization')))
+const diarizationEngines = computed<Record<string, DiarizationEngineInfo>>(() => {
+  const fromSettings = diarization.value?.engines || {}
+  const fromModelConfig = (modelConfig.value?.supported?.diarization || {}) as Record<string, DiarizationEngineInfo>
+  return Object.keys(fromSettings).length ? fromSettings : fromModelConfig
+})
+const diarizationEngineList = computed(() => {
+  const order = ['funasr_campplus', 'pyannote_community', 'pyannote_custom', 'sherpa_onnx_cli']
+  const engines = diarizationEngines.value
+  return [...order.filter((k) => engines[k]), ...Object.keys(engines).filter((k) => !order.includes(k))]
+})
 
 let asrPollTimer: number | null = null
 
@@ -234,6 +244,23 @@ function fillProviderEndpoint(target: 'asr' | 'speaker' | 'diarization') {
   if (provider && provider.endpoint) {
     current.endpoint = provider.endpoint
   }
+}
+
+function onDiarizationEngineChange() {
+  if (!diarization.value) return
+  const info = diarizationEngines.value[diarization.value.engine]
+  if (!info) return
+  diarization.value.provider = info.provider || diarization.value.provider || 'huggingface'
+  diarization.value.endpoint = info.endpoint || diarization.value.endpoint || ''
+  diarization.value.model_id = info.model || diarization.value.model_id
+  if (diarization.value.engine !== 'sherpa_onnx_cli') {
+    diarization.value.command = ''
+  }
+}
+
+function diarizationEngineDescription(info?: DiarizationEngineInfo) {
+  if (!info) return ''
+  return isEnglish.value ? (info.description_en || info.description || '') : (info.description || info.description_en || '')
 }
 
 function modelConfigPath() {
@@ -519,12 +546,14 @@ async function saveDiarizationConfig() {
   try {
     savingDiarization.value = true
     diarization.value = await saveDiarizationSettings({
+      engine: diarization.value.engine || 'pyannote_community',
       provider: diarization.value.provider || 'huggingface',
       endpoint: diarization.value.endpoint || 'https://huggingface.co',
       api_key: hfToken.value.trim() || null,
       hf_token: hfToken.value.trim() || null,
       device: diarization.value.device,
       model_id: diarization.value.model_id,
+      command: diarization.value.command || null,
     })
     hfToken.value = ''
     await refreshModelConfig()
@@ -538,10 +567,11 @@ async function saveDiarizationConfig() {
 
 async function testDiarizationConfig() {
   if (!diarization.value || testingDiarization.value) return
+  const engineInfo = diarizationEngines.value[diarization.value.engine]
   const ok = await dialog.showConfirm({
-    title: '加载 pyannote 说话人分离?',
-    message: `测试会尝试加载 ${diarization.value.model_id}。首次使用可能联网下载模型；需要先在 Hugging Face 接受模型条款并配置 HF_TOKEN。`,
-    detail: `当前 token: ${diarization.value.token_configured ? '已配置' : '未配置'}\n当前设备: ${diarization.value.device}`,
+    title: '加载说话人分离引擎?',
+    message: `测试会尝试加载 ${engineInfo?.name || diarization.value.engine} / ${diarization.value.model_id}。首次使用可能联网下载模型。`,
+    detail: `Token: ${diarization.value.token_configured ? '已配置' : '未配置'}\n设备: ${diarization.value.device}\n依赖: ${engineInfo?.dependency_available === false ? (engineInfo.install_hint || '不可用') : '可用或待加载'}`,
     confirmText: '开始测试',
     cancelText: t('btn.cancel') || '取消',
     danger: false,
@@ -550,7 +580,7 @@ async function testDiarizationConfig() {
   try {
     testingDiarization.value = true
     diarization.value = await testDiarizationSettings()
-    window.toast?.(diarization.value.enabled ? 'pyannote 已可用' : (diarization.value.last_error || 'pyannote 不可用'), diarization.value.enabled ? 'ok' : 'error')
+    window.toast?.(diarization.value.enabled ? '说话人分离引擎已可用' : (diarization.value.last_error || '说话人分离引擎不可用'), diarization.value.enabled ? 'ok' : 'error')
   } catch (e) {
     window.toast?.(`测试失败: ${e instanceof Error ? e.message : e}`, 'error')
   } finally {
@@ -951,11 +981,19 @@ onUnmounted(() => {
     <!-- 说话人分离 -->
     <div v-if="diarization" class="set-row diarization-row">
       <div class="l llm-head">
-        <span class="llm-title"><span>说话人分离</span><em>PYANNOTE</em></span>
+        <span class="llm-title"><span>说话人分离</span><em>DIARIZATION</em></span>
         <span class="diag-badge" :class="{ on: diarization.enabled }">{{ diarization.enabled ? '可用' : '未启用' }}</span>
       </div>
-      <div class="d">上传会议的多人分段依赖 pyannote。实时录音的声纹引擎只能做临时聚类和已登记人物匹配，不能替代完整会议的多人分离。</div>
+      <div class="d">上传会议的多人分段可选择 pyannote、FunASR CAM++ 或本地命令适配器。实时录音的声纹引擎仍只负责临时聚类和已登记人物匹配。</div>
       <div class="llm-form">
+        <label>
+          <span>Engine</span>
+          <select v-model="diarization.engine" @change="onDiarizationEngineChange">
+            <option v-for="key in diarizationEngineList" :key="key" :value="key">
+              {{ diarizationEngines[key]?.name || key }}
+            </option>
+          </select>
+        </label>
         <label>
           <span>Provider</span>
           <select v-model="diarization.provider" @change="fillProviderEndpoint('diarization')">
@@ -982,8 +1020,12 @@ onUnmounted(() => {
             <option value="cuda">cuda</option>
           </select>
         </label>
+        <label v-if="diarization.engine === 'sherpa_onnx_cli'" class="full">
+          <span>Local Command</span>
+          <input v-model.trim="diarization.command" type="text" autocomplete="off" placeholder="python scripts/diarize.py --input &quot;{input}&quot; --output &quot;{output}&quot;" />
+        </label>
         <div class="llm-secret-note">
-          pyannote 配置保存到 <code>{{ modelConfigPath() }}</code>。使用 gated 模型前需要先打开模型页面接受条款，再创建 Read token。
+          配置保存到 <code>{{ modelConfigPath() }}</code>。pyannote 需要 HF_TOKEN；FunASR CAM++ 会复用 ModelScope 本地缓存；本地命令需输出 JSON 或 RTTM。
         </div>
       </div>
       <div class="diag-links">
@@ -996,16 +1038,23 @@ onUnmounted(() => {
           {{ savingDiarization ? '保存中…' : '保存配置' }}
         </button>
         <button class="btn ghost sm" type="button" :disabled="testingDiarization" @click="testDiarizationConfig">
-          {{ testingDiarization ? '加载中…' : '测试加载 pyannote' }}
+          {{ testingDiarization ? '加载中…' : '测试加载引擎' }}
         </button>
       </div>
       <div class="llm-status diag-status">
         <span>Token:</span>
         <b :class="diarization.token_configured ? 'on' : 'off'">{{ diarization.token_configured ? '已配置' : '未配置' }}</b>
         <span v-if="diarization.token_preview" class="model">· {{ diarization.token_preview }}</span>
+        <span class="model">· engine={{ diarization.engine }}</span>
         <span class="model">· {{ diarization.config_source || 'model-settings' }}</span>
         <span class="model">· model={{ diarization.model_id }}</span>
         <span class="model">· device={{ diarization.device }} / loaded={{ diarization.loaded_device }}</span>
+      </div>
+      <div v-if="diarizationEngines[diarization.engine]" class="llm-secret-note">
+        {{ diarizationEngineDescription(diarizationEngines[diarization.engine]) }}
+        <span v-if="diarizationEngines[diarization.engine]?.dependency_available === false">
+          依赖不可用：{{ diarizationEngines[diarization.engine]?.install_hint }}
+        </span>
       </div>
       <div v-if="diarization.last_error" class="llm-error">{{ diarization.last_error }}</div>
       <div v-if="isGatedRepoError(diarization.last_error)" class="llm-secret-note danger">

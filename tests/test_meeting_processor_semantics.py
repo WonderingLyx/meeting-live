@@ -43,7 +43,7 @@ def test_unavailable_diarization_stays_anonymous(monkeypatch):
         last_error = "HF_TOKEN 未设置"
 
     monkeypatch.setattr(
-        "app.services.pyannote_diarization.get_pyannote_diarizer", lambda: Disabled()
+        "app.services.pyannote_diarization.get_diarization_engine", lambda: Disabled()
     )
     processor = MeetingProcessor(None, None, None)
     segments = [{"text": "多人会议", "start": 0, "end": 2, "speaker": None}]

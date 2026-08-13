@@ -49,12 +49,14 @@ class SpeakerSettingsRequest(BaseModel):
 
 
 class DiarizationSettingsRequest(BaseModel):
+    engine: Optional[str] = Field(None, min_length=1, max_length=80)
     provider: Optional[str] = Field(None, min_length=1, max_length=40)
     endpoint: Optional[str] = Field(None, max_length=500)
     api_key: Optional[str] = Field(None, max_length=500)
     hf_token: Optional[str] = Field(None, max_length=500)
     device: str = Field("auto", pattern="^(auto|cpu|cuda)$")
     model_id: Optional[str] = Field(None, min_length=1, max_length=200)
+    command: Optional[str] = Field(None, max_length=1200)
 
 
 class AsrSwitchResponse(BaseModel):
@@ -122,41 +124,105 @@ def _write_env_values(values: dict[str, str]) -> None:
 def _diarization_status(*, load: bool = False) -> dict[str, Any]:
     model_settings = read_model_settings(include_env_secrets=True)
     diarization_settings = model_settings.get("diarization", {})
-    env_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    env_token = (
+        os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGINGFACE_TOKEN")
+        or os.environ.get("MODELSCOPE_API_TOKEN")
+        or os.environ.get("DIARIZATION_API_KEY")
+    )
     configured_token = (diarization_settings.get("api_key") or "").strip()
-    file_token = _read_env_value("HF_TOKEN")
+    file_token = (
+        _read_env_value("DIARIZATION_API_KEY")
+        or _read_env_value("HF_TOKEN")
+        or _read_env_value("MODELSCOPE_API_TOKEN")
+    )
     token = env_token or configured_token or file_token
+    try:
+        from app.services.pyannote_diarization import (
+            DEFAULT_DIARIZATION_ENGINE,
+            default_diarization_model,
+            get_all_diarization_engines,
+            get_diarization_engine,
+            get_diarization_engine_info,
+            normalize_diarization_engine,
+            PyannoteDiarizer,
+            FunASRCampPlusDiarizer,
+            CommandDiarizer,
+        )
+    except Exception as exc:
+        return {
+            "enabled": False,
+            "engine": diarization_settings.get("engine") or "pyannote_community",
+            "engine_info": {},
+            "engines": {},
+            "token_configured": bool(token),
+            "token_preview": _mask_secret(token),
+            "provider": diarization_settings.get("provider") or "huggingface",
+            "endpoint": diarization_settings.get("endpoint") or os.environ.get("HF_ENDPOINT") or "https://huggingface.co",
+            "api_key_configured": bool(token),
+            "api_key_preview": _mask_secret(token),
+            "config_path": public_model_settings()["config_path"],
+            "device": diarization_settings.get("device") or config.speaker.diarization_device,
+            "loaded_device": "cpu",
+            "model_id": diarization_settings.get("model") or PYANNOTE_DEFAULT_MODEL,
+            "command": diarization_settings.get("command") or "",
+            "model_revision": None,
+            "last_error": str(exc),
+            "env_path": str(ENV_PATH),
+            "terms_url": PYANNOTE_TERMS_URL,
+            "token_url": HF_TOKEN_URL,
+        }
+    engine = normalize_diarization_engine(
+        os.environ.get("DIARIZATION_ENGINE")
+        or diarization_settings.get("engine")
+        or DEFAULT_DIARIZATION_ENGINE
+    )
+    engine_info = get_diarization_engine_info(engine)
     model_id = (
-        os.environ.get("PYANNOTE_MODEL")
+        os.environ.get("DIARIZATION_MODEL")
+        or os.environ.get("PYANNOTE_MODEL")
         or diarization_settings.get("model")
+        or engine_info.get("model")
         or _read_env_value("PYANNOTE_MODEL")
-        or PYANNOTE_DEFAULT_MODEL
-    ).strip() or PYANNOTE_DEFAULT_MODEL
+        or default_diarization_model(engine)
+    ).strip() or default_diarization_model(engine)
     model_revision = (
         os.environ.get("PYANNOTE_MODEL_REVISION")
         or _read_env_value("PYANNOTE_MODEL_REVISION")
         or None
     )
     try:
-        from app.services.pyannote_diarization import PyannoteDiarizer, get_pyannote_diarizer
-
         if load:
-            diarizer = get_pyannote_diarizer()
+            diarizer = get_diarization_engine()
             enabled = bool(diarizer.enabled)
             last_error = diarizer.last_error
             loaded_device = diarizer.device
         else:
-            enabled = bool(PyannoteDiarizer._enabled)
-            last_error = PyannoteDiarizer._last_error
-            loaded_device = PyannoteDiarizer._device
-            if not token and not last_error:
+            if engine in {"pyannote", "pyannote_community", "pyannote_custom"}:
+                enabled = bool(PyannoteDiarizer._enabled)
+                last_error = PyannoteDiarizer._last_error
+                loaded_device = PyannoteDiarizer._device
+            elif engine == "funasr_campplus":
+                enabled = bool(FunASRCampPlusDiarizer._enabled)
+                last_error = FunASRCampPlusDiarizer._last_error
+                loaded_device = FunASRCampPlusDiarizer._device
+            else:
+                enabled = bool(CommandDiarizer._enabled)
+                last_error = CommandDiarizer._last_error
+                loaded_device = CommandDiarizer._device
+            if engine_info.get("requires_token") and not token and not last_error:
                 last_error = "HF_TOKEN 未设置"
+            if not engine_info.get("dependency_available") and not last_error:
+                last_error = engine_info.get("install_hint") or "当前分离引擎依赖不可用"
     except Exception as exc:
         enabled = False
         last_error = str(exc)
         loaded_device = "cpu"
     return {
         "enabled": enabled,
+        "engine": engine,
+        "engine_info": engine_info,
+        "engines": get_all_diarization_engines(),
         "token_configured": bool(env_token or configured_token or file_token),
         "token_preview": _mask_secret(env_token or configured_token or file_token),
         "token_source": (
@@ -164,18 +230,19 @@ def _diarization_status(*, load: bool = False) -> dict[str, Any]:
             if env_token
             else ("model-settings" if configured_token else ("env_file" if file_token else None))
         ),
-        "provider": diarization_settings.get("provider") or "huggingface",
-        "endpoint": diarization_settings.get("endpoint") or os.environ.get("HF_ENDPOINT") or "https://huggingface.co",
+        "provider": diarization_settings.get("provider") or engine_info.get("provider") or "huggingface",
+        "endpoint": diarization_settings.get("endpoint") or os.environ.get("DIARIZATION_ENDPOINT") or os.environ.get("HF_ENDPOINT") or engine_info.get("endpoint") or "https://huggingface.co",
         "api_key_configured": bool(env_token or configured_token or file_token),
         "api_key_preview": _mask_secret(env_token or configured_token or file_token),
         "config_path": public_model_settings()["config_path"],
         "device": diarization_settings.get("device") or config.speaker.diarization_device,
         "loaded_device": loaded_device,
         "model_id": model_id,
+        "command": diarization_settings.get("command") or os.environ.get("DIARIZATION_COMMAND") or "",
         "model_revision": model_revision,
         "last_error": last_error,
         "env_path": str(ENV_PATH),
-        "terms_url": PYANNOTE_TERMS_URL,
+        "terms_url": engine_info.get("terms_url") or PYANNOTE_TERMS_URL,
         "token_url": HF_TOKEN_URL,
     }
 
@@ -305,12 +372,14 @@ async def get_model_config():
     """Return the unified model source config with masked secrets."""
     from engine.asr.factory import ASR_ENGINE_CONFIG
     from engine.speaker.speaker_factory import ENGINE_CONFIG
+    from app.services.pyannote_diarization import get_all_diarization_engines
 
     return {
         **public_model_settings(),
         "supported": {
             "asr": ASR_ENGINE_CONFIG,
             "speaker": ENGINE_CONFIG,
+            "diarization": get_all_diarization_engines(),
             "llm_providers": [
                 {"key": "ollama", "label": "Ollama", "endpoint": "http://127.0.0.1:11434/v1"},
                 {"key": "lmstudio", "label": "LM Studio", "endpoint": "http://127.0.0.1:1234/v1"},
@@ -546,29 +615,73 @@ async def get_diarization_settings():
     return _diarization_status()
 
 
+@router.get("/v1/diarization/engines")
+async def list_diarization_engines():
+    from app.services.pyannote_diarization import get_all_diarization_engines
+
+    return {"engines": get_all_diarization_engines()}
+
+
 @router.put("/v1/diarization/settings")
 async def update_diarization_settings(body: DiarizationSettingsRequest):
-    model_id = (body.model_id or PYANNOTE_DEFAULT_MODEL).strip() or PYANNOTE_DEFAULT_MODEL
+    from app.services.pyannote_diarization import (
+        default_diarization_model,
+        get_diarization_engine_info,
+        normalize_diarization_engine,
+        reset_diarization_engine,
+    )
+
+    current = read_model_settings(include_env_secrets=True).get("diarization", {})
+    engine = normalize_diarization_engine(body.engine or current.get("engine"))
+    engine_info = get_diarization_engine_info(engine)
+    model_id = (
+        body.model_id
+        or current.get("model")
+        or engine_info.get("model")
+        or default_diarization_model(engine)
+    ).strip() or default_diarization_model(engine)
     token = (body.api_key or body.hf_token or "").strip()
+    provider = (body.provider or current.get("provider") or engine_info.get("provider") or "huggingface").strip()
+    endpoint = (body.endpoint or current.get("endpoint") or engine_info.get("endpoint") or "").strip()
+    command = (body.command if body.command is not None else current.get("command") or "").strip()
     try:
         update_model_section(
             "diarization",
             {
-                "provider": body.provider,
-                "endpoint": body.endpoint,
+                "engine": engine,
+                "provider": provider,
+                "endpoint": endpoint,
                 "api_key": token,
                 "model": model_id,
+                "command": command,
                 "device": body.device,
             },
         )
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     values = {
+        "DIARIZATION_ENGINE": engine,
+        "DIARIZATION_MODEL": model_id,
+        "DIARIZATION_PROVIDER": provider,
+        "DIARIZATION_ENDPOINT": endpoint,
+        "DIARIZATION_COMMAND": command,
         "PYANNOTE_DEVICE": body.device,
         "PYANNOTE_MODEL": model_id,
     }
     if token:
-        os.environ["HF_TOKEN"] = token
+        os.environ["DIARIZATION_API_KEY"] = token
+        if provider == "huggingface":
+            os.environ["HF_TOKEN"] = token
+        elif provider == "modelscope":
+            os.environ["MODELSCOPE_API_TOKEN"] = token
+    os.environ["DIARIZATION_ENGINE"] = engine
+    os.environ["DIARIZATION_MODEL"] = model_id
+    os.environ["DIARIZATION_PROVIDER"] = provider
+    os.environ["DIARIZATION_ENDPOINT"] = endpoint
+    if command:
+        os.environ["DIARIZATION_COMMAND"] = command
+    else:
+        os.environ.pop("DIARIZATION_COMMAND", None)
     os.environ["PYANNOTE_DEVICE"] = body.device
     os.environ["PYANNOTE_MODEL"] = model_id
     config.speaker.diarization_device = body.device
@@ -578,21 +691,19 @@ async def update_diarization_settings(body: DiarizationSettingsRequest):
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Unable to update .env: {exc}") from exc
 
-    from app.services.pyannote_diarization import reset_pyannote_diarizer
-
-    reset_pyannote_diarizer()
+    reset_diarization_engine()
     return _diarization_status()
 
 
 @router.post("/v1/diarization/test")
 async def test_diarization_settings():
     from app.services.pyannote_diarization import (
-        get_pyannote_diarizer,
-        reset_pyannote_diarizer,
+        get_diarization_engine,
+        reset_diarization_engine,
     )
 
-    reset_pyannote_diarizer()
-    await asyncio.to_thread(get_pyannote_diarizer)
+    reset_diarization_engine()
+    await asyncio.to_thread(get_diarization_engine)
     return _diarization_status(load=True)
 
 

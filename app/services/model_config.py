@@ -26,7 +26,7 @@ MODEL_SOURCE_PROVIDERS = [
         "label": "ModelScope",
         "endpoint": "https://modelscope.cn",
         "token_env": "MODELSCOPE_API_TOKEN",
-        "scope": "asr,speaker",
+        "scope": "asr,speaker,diarization",
     },
     {
         "key": "huggingface",
@@ -40,7 +40,7 @@ MODEL_SOURCE_PROVIDERS = [
         "label": "Local cache/path",
         "endpoint": "file://./models",
         "token_env": "",
-        "scope": "asr,speaker",
+        "scope": "asr,speaker,diarization",
     },
     {
         "key": "custom",
@@ -86,12 +86,20 @@ def default_model_settings() -> dict[str, Any]:
             "device": os.environ.get("SPEAKER_DEVICE", "auto"),
         },
         "diarization": {
+            "engine": os.environ.get("DIARIZATION_ENGINE", "pyannote_community"),
             "provider": os.environ.get("DIARIZATION_PROVIDER", "huggingface"),
-            "endpoint": os.environ.get("HF_ENDPOINT", "https://huggingface.co"),
+            "endpoint": os.environ.get("DIARIZATION_ENDPOINT") or os.environ.get("HF_ENDPOINT", "https://huggingface.co"),
             "api_key": "",
             "model": os.environ.get(
-                "PYANNOTE_MODEL",
-                "pyannote/speaker-diarization-community-1",
+                "DIARIZATION_MODEL",
+                os.environ.get(
+                    "PYANNOTE_MODEL",
+                    "pyannote/speaker-diarization-community-1",
+                ),
+            ),
+            "command": os.environ.get(
+                "DIARIZATION_COMMAND",
+                "",
             ),
             "device": config.speaker.diarization_device,
         },
@@ -144,7 +152,7 @@ def _env_secret_for(section: str, provider: str) -> str:
     provider = (provider or "").strip().lower()
     if section == "llm":
         return os.environ.get("LLM_API_KEY", "")
-    if section == "diarization" or provider == "huggingface":
+    if provider == "huggingface":
         return (
             os.environ.get("HF_TOKEN")
             or os.environ.get("HUGGINGFACE_TOKEN")
@@ -158,6 +166,8 @@ def _env_secret_for(section: str, provider: str) -> str:
             or os.environ.get("MODELSCOPE_TOKEN")
             or ""
         )
+    if section == "diarization":
+        return os.environ.get("DIARIZATION_API_KEY", "")
     return ""
 
 
@@ -339,10 +349,17 @@ def apply_model_settings_to_runtime(settings: Mapping[str, Any] | None = None) -
 
     if diarization:
         _set_provider_environment("diarization", diarization)
+        engine = _trimmed(diarization.get("engine"), os.environ.get("DIARIZATION_ENGINE", "pyannote_community")).lower()
         model = _trimmed(diarization.get("model"))
+        command = _trimmed(diarization.get("command"))
         device = _trimmed(diarization.get("device"), config.speaker.diarization_device).lower()
+        if engine:
+            os.environ["DIARIZATION_ENGINE"] = engine
         if model:
+            os.environ["DIARIZATION_MODEL"] = model
             os.environ["PYANNOTE_MODEL"] = model
+        if command:
+            os.environ["DIARIZATION_COMMAND"] = command
         if device:
             config.speaker.diarization_device = device
             os.environ["PYANNOTE_DEVICE"] = device

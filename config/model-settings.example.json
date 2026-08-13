@@ -17,10 +17,21 @@
     "device": "auto"
   },
   "diarization": {
+    "engine": "funasr_campplus",
+    "provider": "modelscope",
+    "endpoint": "https://modelscope.cn",
+    "api_key": "",
+    "model": "paraformer-zh + fsmn-vad + ct-punc + cam++",
+    "command": "",
+    "device": "auto"
+  },
+  "diarization_pyannote_example": {
+    "engine": "pyannote_community",
     "provider": "huggingface",
     "endpoint": "https://huggingface.co",
     "api_key": "",
     "model": "pyannote/speaker-diarization-community-1",
+    "command": "",
     "device": "auto"
   },
   "llm": {

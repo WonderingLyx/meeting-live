@@ -1,4 +1,5 @@
 import json
+import os
 
 
 def test_public_model_settings_masks_api_keys(tmp_path, monkeypatch):
@@ -50,6 +51,31 @@ def test_model_settings_apply_to_runtime(tmp_path, monkeypatch):
     assert config.audio.asr_engine == "paraformer_full"
     assert config.audio.asr_device == "cpu"
     assert config.audio.asr_load_timeout_sec == 120
+
+
+def test_diarization_settings_apply_engine_to_runtime(tmp_path, monkeypatch):
+    config_path = tmp_path / "model-settings.json"
+    monkeypatch.setenv("MODEL_SETTINGS_FILE", str(config_path))
+
+    from app.services.model_config import apply_model_settings_to_runtime, update_model_section
+
+    update_model_section(
+        "diarization",
+        {
+            "engine": "funasr_campplus",
+            "provider": "modelscope",
+            "endpoint": "https://modelscope.cn",
+            "model": "paraformer-zh + fsmn-vad + ct-punc + cam++",
+            "command": "",
+            "device": "cpu",
+        },
+    )
+
+    apply_model_settings_to_runtime()
+
+    assert os.environ["DIARIZATION_ENGINE"] == "funasr_campplus"
+    assert os.environ["DIARIZATION_MODEL"] == "paraformer-zh + fsmn-vad + ct-punc + cam++"
+    assert os.environ["PYANNOTE_DEVICE"] == "cpu"
 
 
 def test_update_model_section_preserves_secret_when_api_key_blank(tmp_path, monkeypatch):
