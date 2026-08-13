@@ -599,7 +599,9 @@ class ASREngineManager:
                 return
             from app.config import config
             self._engine_cache: dict[str, Any] = {}
-            self._current_type = _normalize_engine_type(config.audio.asr_engine)
+            self._current_type = _normalize_engine_type(
+                os.environ.get("ASR_ENGINE") or config.audio.asr_engine
+            )
             self._current_engine: Any | None = None
             self._switch_lock = threading.Lock()
             self._state_lock = threading.Lock()

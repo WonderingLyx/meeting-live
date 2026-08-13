@@ -10,6 +10,14 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from app.config import config
+from app.services.model_config import (
+    apply_model_settings_to_runtime,
+    public_model_settings,
+    read_raw_model_settings,
+    read_model_settings,
+    update_model_section,
+    write_model_settings,
+)
 
 router = APIRouter()
 
@@ -21,11 +29,29 @@ class AsrSwitchRequest(BaseModel):
 
 class AsrSettingsRequest(BaseModel):
     """ASR runtime settings."""
+    provider: Optional[str] = Field(None, min_length=1, max_length=40)
+    endpoint: Optional[str] = Field(None, max_length=500)
+    api_key: Optional[str] = Field(None, max_length=500)
+    model: Optional[str] = Field(None, min_length=1, max_length=200)
     device: str = Field("auto", min_length=2, max_length=16, description="auto | cpu | cuda")
+    word_timestamps: Optional[bool] = None
+    load_timeout_sec: Optional[int] = Field(None, ge=10, le=600)
     reload_current: bool = True
 
 
+class SpeakerSettingsRequest(BaseModel):
+    """Speaker embedding model settings."""
+    provider: str = Field("modelscope", min_length=1, max_length=40)
+    endpoint: Optional[str] = Field(None, max_length=500)
+    api_key: Optional[str] = Field(None, max_length=500)
+    model: str = Field("campplus", min_length=1, max_length=128)
+    device: str = Field("auto", min_length=2, max_length=16)
+
+
 class DiarizationSettingsRequest(BaseModel):
+    provider: Optional[str] = Field(None, min_length=1, max_length=40)
+    endpoint: Optional[str] = Field(None, max_length=500)
+    api_key: Optional[str] = Field(None, max_length=500)
     hf_token: Optional[str] = Field(None, max_length=500)
     device: str = Field("auto", pattern="^(auto|cpu|cuda)$")
     model_id: Optional[str] = Field(None, min_length=1, max_length=200)
@@ -94,11 +120,15 @@ def _write_env_values(values: dict[str, str]) -> None:
 
 
 def _diarization_status(*, load: bool = False) -> dict[str, Any]:
+    model_settings = read_model_settings(include_env_secrets=True)
+    diarization_settings = model_settings.get("diarization", {})
     env_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    configured_token = (diarization_settings.get("api_key") or "").strip()
     file_token = _read_env_value("HF_TOKEN")
-    token = env_token or file_token
+    token = env_token or configured_token or file_token
     model_id = (
         os.environ.get("PYANNOTE_MODEL")
+        or diarization_settings.get("model")
         or _read_env_value("PYANNOTE_MODEL")
         or PYANNOTE_DEFAULT_MODEL
     ).strip() or PYANNOTE_DEFAULT_MODEL
@@ -127,10 +157,19 @@ def _diarization_status(*, load: bool = False) -> dict[str, Any]:
         loaded_device = "cpu"
     return {
         "enabled": enabled,
-        "token_configured": bool(token),
-        "token_preview": _mask_secret(token),
-        "token_source": "environment" if env_token else ("env_file" if file_token else None),
-        "device": config.speaker.diarization_device,
+        "token_configured": bool(env_token or configured_token or file_token),
+        "token_preview": _mask_secret(env_token or configured_token or file_token),
+        "token_source": (
+            "environment"
+            if env_token
+            else ("model-settings" if configured_token else ("env_file" if file_token else None))
+        ),
+        "provider": diarization_settings.get("provider") or "huggingface",
+        "endpoint": diarization_settings.get("endpoint") or os.environ.get("HF_ENDPOINT") or "https://huggingface.co",
+        "api_key_configured": bool(env_token or configured_token or file_token),
+        "api_key_preview": _mask_secret(env_token or configured_token or file_token),
+        "config_path": public_model_settings()["config_path"],
+        "device": diarization_settings.get("device") or config.speaker.diarization_device,
         "loaded_device": loaded_device,
         "model_id": model_id,
         "model_revision": model_revision,
@@ -214,6 +253,8 @@ def _validate_asr_device(device: str, device_status: dict[str, Any]) -> None:
 
 
 def _asr_settings_status(*, reload_result: dict[str, Any] | None = None) -> dict[str, Any]:
+    public_settings = public_model_settings()
+    asr_source = public_settings.get("asr", {})
     loaded_device = None
     try:
         from engine.asr import get_asr_manager
@@ -224,15 +265,62 @@ def _asr_settings_status(*, reload_result: dict[str, Any] | None = None) -> dict
     except Exception:
         loaded_device = None
     result = {
-        "device": config.audio.asr_device,
+        **asr_source,
+        "model": asr_source.get("model") or config.audio.asr_engine,
+        "device": asr_source.get("device") or config.audio.asr_device,
         "env_device": os.environ.get("ASR_DEVICE") or _read_env_value("ASR_DEVICE") or config.audio.asr_device,
         "loaded_device": loaded_device,
         "env_path": str(ENV_PATH),
+        "config_path": public_settings["config_path"],
         "device_status": _torch_device_status(),
     }
     if reload_result is not None:
         result["reload_result"] = reload_result
     return result
+
+
+def _speaker_settings_status(*, switch_result: dict[str, Any] | None = None) -> dict[str, Any]:
+    public_settings = public_model_settings()
+    speaker_source = public_settings.get("speaker", {})
+    try:
+        from engine.speaker.speaker_factory import get_engine_manager
+
+        manager = get_engine_manager()
+        current = manager.current_type
+    except Exception:
+        current = config.speaker.engine_type
+    result = {
+        **speaker_source,
+        "model": speaker_source.get("model") or current,
+        "current": current,
+        "config_path": public_settings["config_path"],
+    }
+    if switch_result is not None:
+        result["switch_result"] = switch_result
+    return result
+
+
+@router.get("/v1/model-config")
+async def get_model_config():
+    """Return the unified model source config with masked secrets."""
+    from engine.asr.factory import ASR_ENGINE_CONFIG
+    from engine.speaker.speaker_factory import ENGINE_CONFIG
+
+    return {
+        **public_model_settings(),
+        "supported": {
+            "asr": ASR_ENGINE_CONFIG,
+            "speaker": ENGINE_CONFIG,
+            "llm_providers": [
+                {"key": "ollama", "label": "Ollama", "endpoint": "http://127.0.0.1:11434/v1"},
+                {"key": "lmstudio", "label": "LM Studio", "endpoint": "http://127.0.0.1:1234/v1"},
+                {"key": "localai", "label": "LocalAI", "endpoint": "http://127.0.0.1:8080/v1"},
+                {"key": "vllm", "label": "vLLM", "endpoint": "http://127.0.0.1:8000/v1"},
+                {"key": "openai", "label": "OpenAI-compatible", "endpoint": "https://api.openai.com/v1"},
+                {"key": "custom", "label": "Custom", "endpoint": ""},
+            ],
+        },
+    }
 
 
 @router.get("/v1/asr/engines")
@@ -311,37 +399,72 @@ async def get_asr_settings():
 
 @router.put("/v1/asr/settings")
 async def update_asr_settings(body: AsrSettingsRequest, request: Request):
-    """Update ASR device and optionally reload the active ASR engine."""
+    """Update ASR model source/device and optionally reload the active ASR engine."""
     device = _normalize_asr_device(body.device)
     device_status = _torch_device_status()
     _validate_asr_device(device, device_status)
 
     previous_device = config.audio.asr_device or "auto"
-    try:
-        _write_env_values({"ASR_DEVICE": device})
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Unable to update .env: {exc}") from exc
+    previous_engine = config.audio.asr_engine
+    previous_model_settings = read_raw_model_settings()
+    current_model = (body.model or previous_engine).strip()
+    values: dict[str, Any] = {
+        "device": device,
+        "model": current_model,
+    }
+    if body.provider is not None:
+        values["provider"] = body.provider
+    if body.endpoint is not None:
+        values["endpoint"] = body.endpoint
+    if body.api_key is not None:
+        values["api_key"] = body.api_key
+    if body.word_timestamps is not None:
+        values["word_timestamps"] = body.word_timestamps
+    if body.load_timeout_sec is not None:
+        values["load_timeout_sec"] = body.load_timeout_sec
+    env_values = {
+        "ASR_ENGINE": current_model,
+        "ASR_DEVICE": device,
+        **(
+            {"ASR_WORD_TIMESTAMPS": str(body.word_timestamps).lower()}
+            if body.word_timestamps is not None
+            else {}
+        ),
+        **(
+            {"ASR_LOAD_TIMEOUT_SEC": str(body.load_timeout_sec)}
+            if body.load_timeout_sec is not None
+            else {}
+        ),
+    }
 
-    os.environ["ASR_DEVICE"] = device
-    config.audio.asr_device = device
+    try:
+        update_model_section("asr", values)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to update .env/model settings: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    apply_model_settings_to_runtime()
 
     reload_result: dict[str, Any] | None = None
     if body.reload_current:
         from engine.asr import get_asr_manager
 
         manager = get_asr_manager()
-        reload_result = await asyncio.to_thread(manager.reload_current)
+        if current_model and current_model != manager.current_type:
+            reload_result = await asyncio.to_thread(manager.switch_engine, current_model)
+        else:
+            reload_result = await asyncio.to_thread(manager.reload_current)
         if not reload_result.get("success"):
             os.environ["ASR_DEVICE"] = previous_device
+            os.environ["ASR_ENGINE"] = previous_engine
             config.audio.asr_device = previous_device
-            try:
-                _write_env_values({"ASR_DEVICE": previous_device})
-            except OSError:
-                pass
+            config.audio.asr_engine = previous_engine
+            write_model_settings(previous_model_settings)
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"ASR_DEVICE={device} 加载失败，已回滚到 {previous_device}: "
+                    f"ASR 配置加载失败，已回滚运行时到 {previous_engine}/{previous_device}: "
                     f"{reload_result.get('error', 'ASR 重载失败')}"
                 ),
             )
@@ -351,7 +474,71 @@ async def update_asr_settings(body: AsrSettingsRequest, request: Request):
         if runtime is not None:
             runtime.set_asr(new_engine)
 
+    try:
+        _write_env_values(env_values)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to update .env: {exc}") from exc
+
     return _asr_settings_status(reload_result=reload_result)
+
+
+@router.get("/v1/speaker/settings")
+async def get_speaker_settings():
+    """Get speaker embedding model source settings."""
+    return _speaker_settings_status()
+
+
+@router.put("/v1/speaker/settings")
+async def update_speaker_settings(body: SpeakerSettingsRequest, request: Request):
+    """Update speaker embedding source/model and switch runtime engine."""
+    model = body.model.strip()
+    previous_model_settings = read_raw_model_settings()
+    try:
+        update_model_section(
+            "speaker",
+            {
+                "provider": body.provider,
+                "endpoint": body.endpoint,
+                "api_key": body.api_key,
+                "model": model,
+                "device": body.device,
+            },
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to update .env/model settings: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    apply_model_settings_to_runtime()
+
+    from engine.speaker.speaker_factory import get_engine_manager
+
+    manager = get_engine_manager()
+    result = await asyncio.to_thread(manager.switch_engine, model)
+    if not result.get("success"):
+        write_model_settings(previous_model_settings)
+        apply_model_settings_to_runtime()
+        raise HTTPException(status_code=400, detail=result.get("error", "声纹引擎切换失败"))
+
+    new_engine = manager.get_engine()
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is not None:
+        runtime.set_speaker(new_engine)
+    if hasattr(request.app.state, "spk_engine"):
+        request.app.state.spk_engine = new_engine
+
+    try:
+        _write_env_values(
+            {
+                "SPEAKER_ENGINE": result.get("engine_type") or model,
+                "SPEAKER_PROVIDER": body.provider,
+                "SPEAKER_ENDPOINT": body.endpoint or "",
+            }
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to update .env: {exc}") from exc
+
+    return _speaker_settings_status(switch_result=result)
 
 
 @router.get("/v1/diarization/settings")
@@ -362,17 +549,30 @@ async def get_diarization_settings():
 @router.put("/v1/diarization/settings")
 async def update_diarization_settings(body: DiarizationSettingsRequest):
     model_id = (body.model_id or PYANNOTE_DEFAULT_MODEL).strip() or PYANNOTE_DEFAULT_MODEL
+    token = (body.api_key or body.hf_token or "").strip()
+    try:
+        update_model_section(
+            "diarization",
+            {
+                "provider": body.provider,
+                "endpoint": body.endpoint,
+                "api_key": token,
+                "model": model_id,
+                "device": body.device,
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     values = {
         "PYANNOTE_DEVICE": body.device,
         "PYANNOTE_MODEL": model_id,
     }
-    token = (body.hf_token or "").strip()
     if token:
-        values["HF_TOKEN"] = token
         os.environ["HF_TOKEN"] = token
     os.environ["PYANNOTE_DEVICE"] = body.device
     os.environ["PYANNOTE_MODEL"] = model_id
     config.speaker.diarization_device = body.device
+    apply_model_settings_to_runtime()
     try:
         _write_env_values(values)
     except OSError as exc:
@@ -408,6 +608,14 @@ async def switch_asr_engine(body: AsrSwitchRequest, request: Request):
     result = await asyncio.to_thread(manager.switch_engine, body.engine_type)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "ASR 切换失败"))
+
+    try:
+        update_model_section("asr", {"model": result.get("engine_type") or body.engine_type})
+        _write_env_values({"ASR_ENGINE": result.get("engine_type") or body.engine_type})
+        apply_model_settings_to_runtime()
+    except Exception:
+        # Runtime switch already succeeded; persistence failure should not mask it.
+        pass
 
     new_engine = manager.get_engine()
     runtime = getattr(request.app.state, "runtime", None)

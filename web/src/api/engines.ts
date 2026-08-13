@@ -71,12 +71,56 @@ export interface AsrDeviceStatus {
 }
 
 export interface AsrSettings {
+  provider?: string
+  endpoint?: string
+  api_key_configured?: boolean
+  api_key_preview?: string | null
+  model?: string
   device: 'auto' | 'cpu' | 'cuda' | 'mps' | string
+  word_timestamps?: boolean
+  load_timeout_sec?: number
   env_device?: string
   loaded_device?: string | null
   env_path?: string
+  config_path?: string
+  config_source?: string
   device_status: AsrDeviceStatus
   reload_result?: AsrSwitchResponse & { reloaded?: boolean }
+}
+
+export interface SpeakerSettings {
+  provider?: string
+  endpoint?: string
+  api_key_configured?: boolean
+  api_key_preview?: string | null
+  model: string
+  device?: string
+  current?: string
+  config_path?: string
+  config_source?: string
+  switch_result?: { success: boolean; engine_type: string; error?: string }
+}
+
+export interface ModelSourceProvider {
+  key: string
+  label: string
+  endpoint: string
+  token_env?: string
+  scope?: string
+}
+
+export interface ModelConfigResponse {
+  config_path: string
+  providers: ModelSourceProvider[]
+  asr: Partial<AsrSettings>
+  speaker: Partial<SpeakerSettings>
+  diarization?: Record<string, unknown>
+  llm?: Record<string, unknown>
+  supported?: {
+    asr?: Record<string, AsrInfo>
+    speaker?: Record<string, EngineInfo>
+    llm_providers?: Array<{ key: string; label: string; endpoint: string }>
+  }
 }
 
 export interface ModelsInfo {
@@ -142,12 +186,48 @@ export async function getAsrSettings() {
   })
 }
 
-export async function saveAsrSettings(payload: { device: string; reload_current?: boolean }) {
+export async function saveAsrSettings(payload: {
+  provider?: string
+  endpoint?: string | null
+  api_key?: string | null
+  model?: string | null
+  device: string
+  word_timestamps?: boolean
+  load_timeout_sec?: number
+  reload_current?: boolean
+}) {
   return call<AsrSettings>({
     url: '/v1/asr/settings',
     method: 'PUT',
     data: payload,
     timeout: 0,
+  })
+}
+
+export async function getSpeakerSettings() {
+  return call<SpeakerSettings>({
+    url: '/v1/speaker/settings',
+  })
+}
+
+export async function saveSpeakerSettings(payload: {
+  provider?: string
+  endpoint?: string | null
+  api_key?: string | null
+  model: string
+  device?: string
+}) {
+  return call<SpeakerSettings>({
+    url: '/v1/speaker/settings',
+    method: 'PUT',
+    data: payload,
+    timeout: 0,
+  })
+}
+
+export async function getModelConfig() {
+  return call<ModelConfigResponse>({
+    url: '/v1/model-config',
   })
 }
 

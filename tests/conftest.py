@@ -19,6 +19,7 @@ import pytest
 # 测试统一把 MODELS_DIR 指到 tmp,避免 resolve_modelscope 把真实缓存物化到
 # 仓库 ./models/(污染 + 慢)。必须在 app.config 被 import 前设置。
 os.environ.setdefault("MODELS_DIR", os.path.join(tempfile.gettempdir(), "matrix_test_models"))
+os.environ.setdefault("MODEL_SETTINGS_FILE", os.path.join(tempfile.gettempdir(), "matrix_test_model_settings.json"))
 
 
 def _make_spec(name):
@@ -32,6 +33,8 @@ _HEAVY_DEPS = (
     "torch.nn",
     "torch.hub",
     "torchaudio",
+    "chromadb",
+    "chromadb.config",
     "modelscope",
     "qwen_asr",
     "librosa",
@@ -169,6 +172,30 @@ def _install_fake_heavy_deps():
     # scipy: signal.butter / signal.sosfilt
     _make("scipy", submodules=["signal"])
 
+    class _FakeCollection:
+        def add(self, *a, **kw):
+            return None
+
+        def query(self, *a, **kw):
+            return {"ids": [[]], "distances": [[]], "metadatas": [[]]}
+
+        def get(self, *a, **kw):
+            return {"ids": [], "embeddings": [], "metadatas": []}
+
+        def delete(self, *a, **kw):
+            return None
+
+    class _FakeChromaClient:
+        def get_or_create_collection(self, *a, **kw):
+            return _FakeCollection()
+
+    class _FakeChromaSettings:
+        def __init__(self, *a, **kw):
+            pass
+
+    _make("chromadb", attrs={"EphemeralClient": lambda *a, **kw: _FakeChromaClient()}, submodules=["config"])
+    sys.modules["chromadb.config"].Settings = _FakeChromaSettings
+
 
 # 常规单元测试使用轻量替身；真实冒烟测试必须显式退出替身模式。
 if os.environ.get("MATRIX_TEST_REAL_DEPENDENCIES") != "1":
@@ -194,6 +221,7 @@ _ENV_KEYS_TO_ISOLATE = (
     "ASR_ENGINE",
     "ASR_DEVICE",
     "ASR_LOAD_TIMEOUT_SEC",
+    "MODEL_SETTINGS_FILE",
     "JWT_SECRET",
     "UPLOAD_CHUNK_DURATION",
 )
@@ -227,17 +255,57 @@ def _clean_fake_engine_modules():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_os_environ():
+def _isolate_os_environ(tmp_path):
     """隔离 os.environ:测试前清掉关键 key,测试后恢复。"""
     saved = {k: os.environ.get(k) for k in _ENV_KEYS_TO_ISOLATE}
+    cfg_snapshot = None
+    try:
+        from app.config import config
+
+        cfg_snapshot = {
+            "asr_engine": config.audio.asr_engine,
+            "asr_device": config.audio.asr_device,
+            "asr_load_timeout_sec": config.audio.asr_load_timeout_sec,
+            "asr_word_timestamps": config.audio.asr_word_timestamps,
+            "speaker_engine_type": config.speaker.engine_type,
+            "diarization_device": config.speaker.diarization_device,
+            "llm_enabled": config.llm.enabled,
+            "llm_endpoint": config.llm.endpoint,
+            "llm_model": config.llm.model,
+            "llm_api_key": config.llm.api_key,
+            "llm_timeout_sec": config.llm.timeout_sec,
+            "llm_max_input_tokens": config.llm.max_input_tokens,
+            "llm_mock": config.llm.mock,
+            "llm_allow_public": config.llm.allow_public,
+        }
+    except Exception:
+        cfg_snapshot = None
     for k in _ENV_KEYS_TO_ISOLATE:
         os.environ.pop(k, None)
+    os.environ["MODEL_SETTINGS_FILE"] = str(tmp_path / "model-settings.json")
     yield
     for k, v in saved.items():
         if v is None:
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
+    if cfg_snapshot is not None:
+        from app.config import config
+
+        config.audio.asr_engine = cfg_snapshot["asr_engine"]
+        config.audio.asr_device = cfg_snapshot["asr_device"]
+        config.audio.asr_load_timeout_sec = cfg_snapshot["asr_load_timeout_sec"]
+        config.audio.asr_word_timestamps = cfg_snapshot["asr_word_timestamps"]
+        config.speaker.engine_type = cfg_snapshot["speaker_engine_type"]
+        config.speaker.diarization_device = cfg_snapshot["diarization_device"]
+        config.llm.enabled = cfg_snapshot["llm_enabled"]
+        config.llm.endpoint = cfg_snapshot["llm_endpoint"]
+        config.llm.model = cfg_snapshot["llm_model"]
+        config.llm.api_key = cfg_snapshot["llm_api_key"]
+        config.llm.timeout_sec = cfg_snapshot["llm_timeout_sec"]
+        config.llm.max_input_tokens = cfg_snapshot["llm_max_input_tokens"]
+        config.llm.mock = cfg_snapshot["llm_mock"]
+        config.llm.allow_public = cfg_snapshot["llm_allow_public"]
 
 
 @pytest.fixture(autouse=True)

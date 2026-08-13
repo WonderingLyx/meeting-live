@@ -295,6 +295,7 @@ def test_asr_manager_switch_missing_dependency_does_not_load(monkeypatch):
     from engine.asr import factory
 
     factory.ASREngineManager.reset()
+    monkeypatch.setenv("ASR_ENGINE", "qwen3")
     current = object()
 
     def fake_find_spec(name):

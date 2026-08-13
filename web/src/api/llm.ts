@@ -14,6 +14,7 @@ export async function getLlmStatus() {
     max_input_tokens?: number
     has_api_key?: boolean
     config_source?: string
+    config_path?: string
     error?: string | null
     fallback: string
   }>({ url: '/v1/llm/status' })
@@ -35,8 +36,11 @@ export interface LlmSettings {
   timeout_sec: number
   max_input_tokens: number
   mock: boolean
+  api_key?: string | null
   has_api_key?: boolean
+  api_key_preview?: string | null
   config_source?: string
+  config_path?: string
 }
 
 export interface LlmSettingsPayload extends LlmSettings {

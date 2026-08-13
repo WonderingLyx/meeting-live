@@ -14,6 +14,13 @@ from pydantic import BaseModel, Field, field_validator
 from app.config import LLMConfig
 from app.services.llm_gateway import LLMGateway, EndpointSecurityError
 from app.services.llm_prompts import DEFAULT_PROMPTS
+from app.services.model_config import (
+    apply_model_settings_to_runtime,
+    public_model_settings,
+    read_model_settings,
+    section_has_file_config,
+    update_model_section,
+)
 
 logger = logging.getLogger("Matrix_LLM_API")
 
@@ -99,6 +106,8 @@ def _settings_repo(request: Request):
 def _to_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
+    if isinstance(value, bool):
+        return value
     return value.lower() in ("true", "1", "yes", "on")
 
 
@@ -114,30 +123,55 @@ def _to_int(value: str | None, default: int) -> int:
 def _effective_llm_cfg(repo=None) -> tuple[LLMConfig, str, Optional[str]]:
     """返回页面覆盖后的 LLMConfig.
 
-    .env 提供默认值; settings 表里的 llm.* 键覆盖默认值。
+    .env 提供默认值;旧 settings 表兼容读取;config/model-settings.json
+    存在 llm 段时作为新的主配置源。API key 优先用环境变量,否则用
+    model-settings.json。
     """
     base = _env_llm_cfg()
-    if repo is None:
-        return base, "env", None
+    cfg = base
+    provider: Optional[str] = None
+    source = "env"
 
-    provider = repo.get(f"{LLM_SETTING_PREFIX}provider")
-    has_override = any(k.startswith(LLM_SETTING_PREFIX) for k in repo.all_keys())
-    if not has_override:
-        return base, "env", provider
+    has_file_config = section_has_file_config("llm")
+    if repo is not None and not has_file_config:
+        provider = repo.get(f"{LLM_SETTING_PREFIX}provider")
+        has_override = any(k.startswith(LLM_SETTING_PREFIX) for k in repo.all_keys())
+        if has_override:
+            cfg = replace(
+                base,
+                enabled=_to_bool(repo.get(f"{LLM_SETTING_PREFIX}enabled"), base.enabled),
+                endpoint=repo.get(f"{LLM_SETTING_PREFIX}endpoint") or base.endpoint,
+                model=repo.get(f"{LLM_SETTING_PREFIX}model") or base.model,
+                # Secrets are environment/model-config-owned and are never loaded from SQLite.
+                api_key=base.api_key,
+                timeout_sec=_to_int(repo.get(f"{LLM_SETTING_PREFIX}timeout_sec"), base.timeout_sec),
+                max_input_tokens=_to_int(repo.get(f"{LLM_SETTING_PREFIX}max_input_tokens"), base.max_input_tokens),
+                mock=_to_bool(repo.get(f"{LLM_SETTING_PREFIX}mock"), base.mock),
+                allow_public=_to_bool(repo.get(f"{LLM_SETTING_PREFIX}allow_public"), base.allow_public),
+            )
+            source = "settings"
 
-    cfg = replace(
-        base,
-        enabled=_to_bool(repo.get(f"{LLM_SETTING_PREFIX}enabled"), base.enabled),
-        endpoint=repo.get(f"{LLM_SETTING_PREFIX}endpoint") or base.endpoint,
-        model=repo.get(f"{LLM_SETTING_PREFIX}model") or base.model,
-        # Secrets are environment-owned and are never loaded from SQLite.
-        api_key=base.api_key,
-        timeout_sec=_to_int(repo.get(f"{LLM_SETTING_PREFIX}timeout_sec"), base.timeout_sec),
-        max_input_tokens=_to_int(repo.get(f"{LLM_SETTING_PREFIX}max_input_tokens"), base.max_input_tokens),
-        mock=_to_bool(repo.get(f"{LLM_SETTING_PREFIX}mock"), base.mock),
-        allow_public=_to_bool(repo.get(f"{LLM_SETTING_PREFIX}allow_public"), base.allow_public),
-    )
-    return cfg, "settings", provider
+    if has_file_config:
+        try:
+            llm_settings = read_model_settings(include_env_secrets=False).get("llm", {})
+        except ValueError:
+            llm_settings = {}
+        provider = llm_settings.get("provider") or provider
+        file_api_key = (llm_settings.get("api_key") or "").strip() or None
+        cfg = replace(
+            cfg,
+            enabled=_to_bool(llm_settings.get("enabled"), cfg.enabled),
+            endpoint=llm_settings.get("endpoint") or cfg.endpoint,
+            model=llm_settings.get("model") or cfg.model,
+            api_key=base.api_key or file_api_key,
+            timeout_sec=_to_int(str(llm_settings.get("timeout_sec")) if llm_settings.get("timeout_sec") is not None else None, cfg.timeout_sec),
+            max_input_tokens=_to_int(str(llm_settings.get("max_input_tokens")) if llm_settings.get("max_input_tokens") is not None else None, cfg.max_input_tokens),
+            mock=_to_bool(llm_settings.get("mock"), cfg.mock),
+            allow_public=_to_bool(llm_settings.get("allow_public"), cfg.allow_public),
+        )
+        source = "model-settings"
+
+    return cfg, source, provider
 
 
 def _get_gateway(request: Request) -> LLMGateway:
@@ -360,6 +394,7 @@ async def llm_status(request: Request):
         "max_input_tokens": cfg.max_input_tokens,
         "has_api_key": bool(cfg.api_key),
         "config_source": source,
+        "config_path": public_model_settings()["config_path"],
         "error": probe["error"] if probe else None,
         "fallback": "extractive-textrank",
     }
@@ -407,6 +442,7 @@ async def test_llm_connection(request: Request):
         "max_input_tokens": cfg.max_input_tokens,
         "has_api_key": bool(cfg.api_key),
         "config_source": source,
+        "config_path": public_model_settings()["config_path"],
         "error": probe["error"],
         "fallback": "extractive-textrank",
     }
@@ -425,7 +461,9 @@ def get_llm_settings(request: Request):
         "max_input_tokens": cfg.max_input_tokens,
         "mock": cfg.mock,
         "has_api_key": bool(cfg.api_key),
+        "api_key_preview": public_model_settings().get("llm", {}).get("api_key_preview"),
         "config_source": source,
+        "config_path": public_model_settings()["config_path"],
     }
 
 
@@ -435,11 +473,23 @@ def update_llm_settings(body: LLMSettingsRequest, request: Request):
     if repo is None:
         raise HTTPException(status_code=500, detail="settings repository unavailable")
 
-    if body.api_key and body.api_key.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="API Key 不写入数据库，请通过 LLM_API_KEY 环境变量配置",
+    try:
+        update_model_section(
+            "llm",
+            {
+                "provider": body.provider,
+                "enabled": body.enabled,
+                "endpoint": body.endpoint,
+                "model": body.model,
+                "api_key": body.api_key,
+                "allow_public": body.allow_public,
+                "timeout_sec": body.timeout_sec,
+                "max_input_tokens": body.max_input_tokens,
+                "mock": body.mock,
+            },
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     repo.set(f"{LLM_SETTING_PREFIX}provider", body.provider)
     repo.set(f"{LLM_SETTING_PREFIX}enabled", str(body.enabled).lower())
@@ -451,6 +501,7 @@ def update_llm_settings(body: LLMSettingsRequest, request: Request):
     repo.set(f"{LLM_SETTING_PREFIX}mock", str(body.mock).lower())
     # Remove plaintext keys left by pre-release builds.
     repo.delete(f"{LLM_SETTING_PREFIX}api_key")
+    apply_model_settings_to_runtime()
     # A result for the previous endpoint/model must not survive a save. Saving
     # is passive; a new result is created only by POST /v1/llm/test.
     request.app.state.llm_probe_result = None

@@ -64,6 +64,7 @@ CLAUDE.md
 # Local config
 .env
 .env.local
+config/model-settings.json
 
 # iFlow
 .agents/

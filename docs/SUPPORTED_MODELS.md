@@ -1,0 +1,42 @@
+# 当前内置模型列表
+
+本文只列当前代码已经内置、可在设置页选择并自动下载/加载的 ASR 与声纹模型。更多候选模型和 star 快照见 `docs/OPEN_SOURCE_SPEECH_MODELS.md`。
+
+## ASR 模型
+
+| 设置值 | 显示名 | 上游模型 | 语言/场景 | 依赖 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| `sensevoice_zh` | SenseVoice-Small Chinese | `iic/SenseVoiceSmall` | 中文/粤语会议快速转写 | `funasr` | 中文固定语言，中文会议优先测试 |
+| `sensevoice` | SenseVoice-Small | `iic/SenseVoiceSmall` | 中文/英语/粤语/日语/韩语 | `funasr` | 多语种轻量对照 |
+| `paraformer` | Paraformer | `paraformer-zh` | 中文会议/访谈离线转写 | `funasr` | 稳定中文基线 |
+| `paraformer_full` | Paraformer + VAD + Punc | `paraformer-zh + fsmn-vad + ct-punc` | 较长中文会议、自动断句标点 | `funasr` | 首次会下载 ASR、VAD、标点模型 |
+| `paraformer_large` | Paraformer Large | `iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch` | 高质量普通话离线转写 | `funasr` | 适合质量对照 |
+| `paraformer_spk` | Paraformer + Speaker Tags | `paraformer-zh + fsmn-vad + ct-punc + cam++` | 带 FunASR 内部 speaker 标签的转写 | `funasr` | 只作对照，不替代项目声纹/pyannote |
+| `paraformer_streaming` | Paraformer Streaming | `paraformer-zh-streaming` | 低延迟中文实时字幕 | `funasr` | 当前适配层仍按 VAD 段调用 |
+| `qwen3` | Qwen3-ASR | `Qwen/Qwen3-ASR-0.6B` | 高质量中文/多语种离线转写 | `qwen_asr` 等 | 可选 `ASR_WORD_TIMESTAMPS=true` 启用 forced aligner |
+| `plugin:<id>` | 外部 ASR 插件 | 由 `config/asr_plugins*.json` 定义 | 自定义 | 自定义 | 用于接入 faster-whisper、whisper.cpp、sherpa-onnx 等 |
+
+## 声纹模型
+
+| 设置值 | 显示名 | 上游模型 | 参数/维度 | 推荐场景 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| `campplus` | CamPlus | `damo/speech_campplus_sv_zh-cn_16k-common` | 7.2M / 192d | 默认实时中文声纹 | 速度快，适合实时 |
+| `campplus_cn_en` | CamPlus Chinese-English | `iic/speech_campplus_sv_zh_en_16k-common_advanced` | 7.2M / 512d | 中英混合会议 | 适合普通话夹英文 |
+| `eres2net` | ERes2NetV2 | `iic/speech_eres2netv2_sv_zh-cn_16k-common` | 17.8M / 192d | 中文高精度对照 | 精度较高 |
+| `eres2net_base` | ERes2Net Base | `iic/speech_eres2net_base_sv_zh-cn_3dspeaker_16k` | 6.61M / 512d | 速度/精度折中 | 3D-Speaker 中文基线 |
+| `eres2net_large` | ERes2Net Large | `iic/speech_eres2net_large_sv_zh-cn_3dspeaker_16k` | 22.46M / 512d | 离线高精度声纹 | 适合强机器质量对照 |
+| `ecapa_tdnn` | ECAPA-TDNN | `iic/speech_ecapa-tdnn_sv_zh-cn_3dspeaker_16k` | 20.8M / 192d | 经典中文声纹基线 | 适合和 CAM++ / ERes2Net 对照 |
+| `wespeaker` | ResNet34 | `iic/speech_resnet34_sv_zh-cn_3dspeaker_16k` | 6.34M / 256d | 稳定轻量基线 | WeSpeaker 路线 |
+
+## 统一配置文件
+
+设置页保存后会写入 `config/model-settings.json`，模板见 `config/model-settings.example.json`。真实配置文件已加入 `.gitignore`，因为里面可能包含 API key。
+
+支持的配置段：
+
+| 段 | 字段 | 说明 |
+| --- | --- | --- |
+| `asr` | `provider`, `endpoint`, `api_key`, `model`, `device`, `word_timestamps`, `load_timeout_sec` | ASR 模型源、模型选择和运行设备 |
+| `speaker` | `provider`, `endpoint`, `api_key`, `model`, `device` | 声纹 embedding 模型源和模型选择 |
+| `diarization` | `provider`, `endpoint`, `api_key`, `model`, `device` | pyannote 多人分离模型 |
+| `llm` | `provider`, `endpoint`, `api_key`, `model`, `enabled`, `allow_public`, `timeout_sec`, `max_input_tokens`, `mock` | OpenAI-compatible LLM 配置 |

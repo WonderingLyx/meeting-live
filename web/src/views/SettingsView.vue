@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getAsrSettings, getEngines, getModels, saveAsrSettings, switchAsrEngine, switchEngine, testAsrEngine, type AsrInfo, type AsrSettings, type AsrTestResponse, type EngineInfo, type ModelsInfo } from '../api/engines'
+import { getAsrSettings, getEngines, getModelConfig, getModels, getSpeakerSettings, saveAsrSettings, saveSpeakerSettings, switchAsrEngine, switchEngine, testAsrEngine, type AsrInfo, type AsrSettings, type AsrTestResponse, type EngineInfo, type ModelConfigResponse, type ModelSourceProvider, type ModelsInfo, type SpeakerSettings } from '../api/engines'
 import { getLlmSettings, getLlmStatus, saveLlmSettings, testLlmConnection, getLlmPrompts, saveLlmPrompts, listLlmModels, type LlmSettings, type LlmPrompts } from '../api/llm'
 import { getDiarizationSettings, saveDiarizationSettings, testDiarizationSettings, type DiarizationSettings } from '../api/diarization'
 type LlmResp = Awaited<ReturnType<typeof getLlmStatus>>
@@ -31,12 +31,19 @@ const llmModelSource = ref('')
 const llmModelError = ref('')
 const diarization = ref<DiarizationSettings | null>(null)
 const asrSettings = ref<AsrSettings | null>(null)
+const speakerSettings = ref<SpeakerSettings | null>(null)
+const modelConfig = ref<ModelConfigResponse | null>(null)
 const hfToken = ref('')
+const asrApiKey = ref('')
+const speakerApiKey = ref('')
+const llmApiKey = ref('')
 const savingLlm = ref(false)
 const savingPrompts = ref(false)
 const loadingLlmModels = ref(false)
 const savingDiarization = ref(false)
+const savingAsrConfig = ref(false)
 const savingAsrDevice = ref(false)
+const savingSpeaker = ref(false)
 const testingDiarization = ref(false)
 const showPrompts = ref(false)
 const showErrorPanel = ref(false)
@@ -203,7 +210,40 @@ const llmProviders = [
   { key: 'custom', label: 'Custom', endpoint: '', model: '', allowPublic: false },
 ]
 
+const modelSourceProviders: ModelSourceProvider[] = [
+  { key: 'modelscope', label: 'ModelScope', endpoint: 'https://modelscope.cn', token_env: 'MODELSCOPE_API_TOKEN', scope: 'asr,speaker' },
+  { key: 'huggingface', label: 'Hugging Face', endpoint: 'https://huggingface.co', token_env: 'HF_TOKEN', scope: 'asr,speaker,diarization' },
+  { key: 'local', label: 'Local cache/path', endpoint: 'file://./models', token_env: '', scope: 'asr,speaker' },
+  { key: 'custom', label: 'Custom', endpoint: '', token_env: '', scope: 'asr,speaker,diarization' },
+]
+
+const sourceProviders = computed(() => modelConfig.value?.providers?.length ? modelConfig.value.providers : modelSourceProviders)
+const asrProviderOptions = computed(() => sourceProviders.value.filter((p) => !p.scope || p.scope.includes('asr')))
+const speakerProviderOptions = computed(() => sourceProviders.value.filter((p) => !p.scope || p.scope.includes('speaker')))
+const diarizationProviderOptions = computed(() => sourceProviders.value.filter((p) => !p.scope || p.scope.includes('diarization')))
+
 let asrPollTimer: number | null = null
+
+function fillProviderEndpoint(target: 'asr' | 'speaker' | 'diarization') {
+  const current =
+    target === 'asr' ? asrSettings.value
+      : target === 'speaker' ? speakerSettings.value
+        : diarization.value
+  if (!current) return
+  const provider = sourceProviders.value.find((p) => p.key === current.provider)
+  if (provider && provider.endpoint) {
+    current.endpoint = provider.endpoint
+  }
+}
+
+function modelConfigPath() {
+  return modelConfig.value?.config_path
+    || asrSettings.value?.config_path
+    || speakerSettings.value?.config_path
+    || diarization.value?.config_path
+    || llmSettings.value?.config_path
+    || ''
+}
 
 async function refreshLlmModels(showToast = false) {
   const settings = llmSettings.value
@@ -250,7 +290,24 @@ async function refreshAsrSettings() {
   }
 }
 
+async function refreshModelConfig() {
+  try {
+    modelConfig.value = await getModelConfig()
+  } catch {
+    modelConfig.value = null
+  }
+}
+
+async function refreshSpeakerSettings() {
+  try {
+    speakerSettings.value = await getSpeakerSettings()
+  } catch {
+    speakerSettings.value = null
+  }
+}
+
 async function load() {
+  await refreshModelConfig()
   try {
     const r = await getEngines()
     engines.value = r.engines
@@ -258,6 +315,7 @@ async function load() {
   } catch { /* 后端 8000 不通时静默 */ }
   await refreshModels()
   await refreshAsrSettings()
+  await refreshSpeakerSettings()
   try {
     diarization.value = await getDiarizationSettings()
   } catch {
@@ -298,6 +356,7 @@ async function pickEngine(key: string) {
     window.toast?.(t('settings.engine.switching', info?.name || key) || `正在切换声纹引擎: ${info?.name || key}`, 'info')
     await switchEngine(key)
     currentEngine.value = key
+    await refreshSpeakerSettings()
     models.value = await getModels()
     window.toast?.(t('settings.engine.switched', key) || `已切换到 ${key}`, 'ok')
   } catch (e) {
@@ -329,6 +388,7 @@ async function pickAsr(key: string) {
     switchingAsr.value = key
     window.toast?.(t('settings.asr.switching', info?.name || key) || `正在切换 ASR: ${info?.name || key}`, 'info')
     await switchAsrEngine(key)
+    await refreshAsrSettings()
     models.value = await getModels()
     window.toast?.(t('settings.asr.switched', info?.name || key) || `ASR 已切换到 ${info?.name || key}`, 'ok')
   } catch (e) {
@@ -381,7 +441,15 @@ async function pickAsrDevice(device: 'auto' | 'cpu' | 'cuda') {
     savingAsrDevice.value = true
     switchingAsr.value = currentAsr.value
     window.toast?.(`正在重载 ASR 到 ${asrDeviceName(device)}`, 'info')
-    asrSettings.value = await saveAsrSettings({ device, reload_current: true })
+    asrSettings.value = await saveAsrSettings({
+      provider: asrSettings.value?.provider,
+      endpoint: asrSettings.value?.endpoint,
+      model: asrSettings.value?.model || currentAsr.value,
+      device,
+      word_timestamps: asrSettings.value?.word_timestamps,
+      load_timeout_sec: asrSettings.value?.load_timeout_sec,
+      reload_current: true,
+    })
     models.value = await getModels()
     window.toast?.(`ASR 已切换到 ${asrDeviceName(device)}`, 'ok')
   } catch (e) {
@@ -392,16 +460,74 @@ async function pickAsrDevice(device: 'auto' | 'cpu' | 'cuda') {
   }
 }
 
+async function saveAsrConfig() {
+  if (!asrSettings.value || savingAsrConfig.value || asrBusy.value) return
+  try {
+    savingAsrConfig.value = true
+    switchingAsr.value = asrSettings.value.model || currentAsr.value
+    asrSettings.value = await saveAsrSettings({
+      provider: asrSettings.value.provider,
+      endpoint: asrSettings.value.endpoint,
+      api_key: asrApiKey.value.trim() || null,
+      model: asrSettings.value.model || currentAsr.value,
+      device: asrSettings.value.device || 'auto',
+      word_timestamps: !!asrSettings.value.word_timestamps,
+      load_timeout_sec: Number(asrSettings.value.load_timeout_sec) || 90,
+      reload_current: true,
+    })
+    asrApiKey.value = ''
+    await refreshModelConfig()
+    models.value = await getModels()
+    window.toast?.('ASR 模型配置已保存', 'ok')
+  } catch (e) {
+    window.toast?.(`ASR 配置保存失败: ${e instanceof Error ? e.message : e}`, 'error')
+  } finally {
+    switchingAsr.value = null
+    savingAsrConfig.value = false
+  }
+}
+
+async function saveSpeakerConfig() {
+  if (!speakerSettings.value || savingSpeaker.value) return
+  try {
+    savingSpeaker.value = true
+    switchingEngine.value = speakerSettings.value.model
+    speakerSettings.value = await saveSpeakerSettings({
+      provider: speakerSettings.value.provider,
+      endpoint: speakerSettings.value.endpoint,
+      api_key: speakerApiKey.value.trim() || null,
+      model: speakerSettings.value.model,
+      device: speakerSettings.value.device || 'auto',
+    })
+    speakerApiKey.value = ''
+    await refreshModelConfig()
+    const r = await getEngines()
+    engines.value = r.engines
+    currentEngine.value = r.current
+    models.value = await getModels()
+    window.toast?.('声纹模型配置已保存', 'ok')
+  } catch (e) {
+    window.toast?.(`声纹配置保存失败: ${e instanceof Error ? e.message : e}`, 'error')
+  } finally {
+    switchingEngine.value = null
+    savingSpeaker.value = false
+  }
+}
+
 async function saveDiarizationConfig() {
   if (!diarization.value || savingDiarization.value) return
   try {
     savingDiarization.value = true
     diarization.value = await saveDiarizationSettings({
+      provider: diarization.value.provider || 'huggingface',
+      endpoint: diarization.value.endpoint || 'https://huggingface.co',
+      api_key: hfToken.value.trim() || null,
       hf_token: hfToken.value.trim() || null,
       device: diarization.value.device,
       model_id: diarization.value.model_id,
     })
     hfToken.value = ''
+    await refreshModelConfig()
     window.toast?.('说话人分离配置已保存', 'ok')
   } catch (e) {
     window.toast?.(`保存失败: ${e instanceof Error ? e.message : e}`, 'error')
@@ -462,10 +588,13 @@ async function saveLlmConfig() {
     savingLlm.value = true
     const payload = {
       ...llmSettings.value,
+      api_key: llmApiKey.value.trim() || null,
       timeout_sec: Math.max(10, Math.min(600, Number(llmSettings.value.timeout_sec) || 120)),
       max_input_tokens: Math.max(500, Math.min(200000, Number(llmSettings.value.max_input_tokens) || 8000)),
     }
     await saveLlmSettings(payload)
+    llmApiKey.value = ''
+    await refreshModelConfig()
     llm.value = await getLlmStatus()
     llmSettings.value = await getLlmSettings()
     window.toast?.(t('settings.llm.savedPassive') || 'LLM 配置已保存，未发起连接测试', 'ok')
@@ -589,6 +718,44 @@ onUnmounted(() => {
         <em>ASR</em>
       </div>
       <div class="d">{{ t('settings.asr.desc') || '当前语音识别模型由后端 ASR_ENGINE 环境变量决定,修改后需重启服务。' }}</div>
+      <div v-if="asrSettings" class="llm-form model-source-form">
+        <label>
+          <span>Provider</span>
+          <select v-model="asrSettings.provider" @change="fillProviderEndpoint('asr')">
+            <option v-for="p in asrProviderOptions" :key="p.key" :value="p.key">{{ p.label }}</option>
+          </select>
+        </label>
+        <label>
+          <span>Model</span>
+          <select v-model="asrSettings.model">
+            <option v-for="key in asrList" :key="key" :value="key">{{ asrEngines[key]?.name || key }}</option>
+          </select>
+        </label>
+        <label class="full">
+          <span>Endpoint / Base URL</span>
+          <input v-model.trim="asrSettings.endpoint" placeholder="https://modelscope.cn" />
+        </label>
+        <label>
+          <span>API Key</span>
+          <input v-model.trim="asrApiKey" type="password" autocomplete="off" :placeholder="asrSettings.api_key_configured ? `已配置 ${asrSettings.api_key_preview || ''}, 留空保留` : '可选, 如 hf_... 或 ModelScope token'" />
+        </label>
+        <label>
+          <span>加载超时秒</span>
+          <input v-model.number="asrSettings.load_timeout_sec" type="number" min="10" max="600" step="10" />
+        </label>
+        <label class="inline-check full">
+          <input v-model="asrSettings.word_timestamps" type="checkbox" />
+          <span>Qwen3 字级时间戳</span>
+        </label>
+        <div class="llm-secret-note">
+          配置保存到 <code>{{ modelConfigPath() }}</code>；API Key 留空会保留已有值。选择未缓存模型时会自动下载，下载进度在下方显示。
+        </div>
+      </div>
+      <div v-if="asrSettings" class="llm-options llm-actions model-config-actions">
+        <button class="btn primary sm" type="button" :disabled="savingAsrConfig || asrBusy" @click="saveAsrConfig">
+          {{ savingAsrConfig ? '保存中…' : '保存并加载 ASR' }}
+        </button>
+      </div>
       <div v-if="asrSettings" class="asr-device-panel">
         <div class="asr-device-head">
           <span>运行设备</span>
@@ -709,6 +876,44 @@ onUnmounted(() => {
         <em>{{ t('view.settings.engine') }}</em>
       </div>
       <div class="d">{{ t('settings.engine.desc') }}</div>
+      <div v-if="speakerSettings" class="llm-form model-source-form">
+        <label>
+          <span>Provider</span>
+          <select v-model="speakerSettings.provider" @change="fillProviderEndpoint('speaker')">
+            <option v-for="p in speakerProviderOptions" :key="p.key" :value="p.key">{{ p.label }}</option>
+          </select>
+        </label>
+        <label>
+          <span>Model</span>
+          <select v-model="speakerSettings.model">
+            <option v-for="key in engineList" :key="key" :value="key">{{ engines[key]?.name || key }}</option>
+          </select>
+        </label>
+        <label class="full">
+          <span>Endpoint / Base URL</span>
+          <input v-model.trim="speakerSettings.endpoint" placeholder="https://modelscope.cn" />
+        </label>
+        <label>
+          <span>API Key</span>
+          <input v-model.trim="speakerApiKey" type="password" autocomplete="off" :placeholder="speakerSettings.api_key_configured ? `已配置 ${speakerSettings.api_key_preview || ''}, 留空保留` : '可选, 如 ModelScope token'" />
+        </label>
+        <label>
+          <span>运行设备</span>
+          <select v-model="speakerSettings.device">
+            <option value="auto">auto</option>
+            <option value="cpu">cpu</option>
+            <option value="cuda">gpu/cuda/rocm</option>
+          </select>
+        </label>
+        <div class="llm-secret-note">
+          声纹模型配置保存到 <code>{{ modelConfigPath() }}</code>。切换不同 embedding 维度的模型后，旧声音样本会保留但不会跨模型误匹配。
+        </div>
+      </div>
+      <div v-if="speakerSettings" class="llm-options llm-actions model-config-actions">
+        <button class="btn primary sm" type="button" :disabled="savingSpeaker || !!switchingEngine" @click="saveSpeakerConfig">
+          {{ savingSpeaker ? '保存中…' : '保存并加载声纹' }}
+        </button>
+      </div>
       <div class="eng-list">
         <div
           v-for="key in engineList"
@@ -752,12 +957,22 @@ onUnmounted(() => {
       <div class="d">上传会议的多人分段依赖 pyannote。实时录音的声纹引擎只能做临时聚类和已登记人物匹配，不能替代完整会议的多人分离。</div>
       <div class="llm-form">
         <label>
-          <span>Hugging Face Token</span>
-          <input v-model.trim="hfToken" type="password" autocomplete="off" placeholder="hf_... 留空则保留已有 token" />
+          <span>Provider</span>
+          <select v-model="diarization.provider" @change="fillProviderEndpoint('diarization')">
+            <option v-for="p in diarizationProviderOptions" :key="p.key" :value="p.key">{{ p.label }}</option>
+          </select>
         </label>
         <label>
-          <span>pyannote 模型</span>
+          <span>Model</span>
           <input v-model.trim="diarization.model_id" type="text" autocomplete="off" placeholder="pyannote/speaker-diarization-community-1" />
+        </label>
+        <label class="full">
+          <span>Endpoint / Base URL</span>
+          <input v-model.trim="diarization.endpoint" type="text" autocomplete="off" placeholder="https://huggingface.co" />
+        </label>
+        <label>
+          <span>API Key</span>
+          <input v-model.trim="hfToken" type="password" autocomplete="off" :placeholder="diarization.api_key_configured || diarization.token_configured ? `已配置 ${diarization.api_key_preview || diarization.token_preview || ''}, 留空保留` : 'hf_...'" />
         </label>
         <label>
           <span>运行设备</span>
@@ -768,7 +983,7 @@ onUnmounted(() => {
           </select>
         </label>
         <div class="llm-secret-note">
-          token 会写入本项目 .env。使用前需要先打开模型页面接受条款，再到 Hugging Face 创建 Read token。
+          pyannote 配置保存到 <code>{{ modelConfigPath() }}</code>。使用 gated 模型前需要先打开模型页面接受条款，再创建 Read token。
         </div>
       </div>
       <div class="diag-links">
@@ -788,6 +1003,7 @@ onUnmounted(() => {
         <span>Token:</span>
         <b :class="diarization.token_configured ? 'on' : 'off'">{{ diarization.token_configured ? '已配置' : '未配置' }}</b>
         <span v-if="diarization.token_preview" class="model">· {{ diarization.token_preview }}</span>
+        <span class="model">· {{ diarization.config_source || 'model-settings' }}</span>
         <span class="model">· model={{ diarization.model_id }}</span>
         <span class="model">· device={{ diarization.device }} / loaded={{ diarization.loaded_device }}</span>
       </div>
@@ -846,6 +1062,10 @@ onUnmounted(() => {
           <span>Endpoint</span>
           <input v-model.trim="llmSettings.endpoint" placeholder="http://127.0.0.1:11434/v1" />
         </label>
+        <label class="full">
+          <span>API Key</span>
+          <input v-model.trim="llmApiKey" type="password" autocomplete="off" :placeholder="llmSettings.has_api_key ? `已配置 ${llmSettings.api_key_preview || ''}, 留空保留` : '本地 Ollama 可留空, OpenAI-compatible 服务填写 Bearer token'" />
+        </label>
         <label>
           <span>Timeout 秒</span>
           <input v-model.number="llmSettings.timeout_sec" type="number" min="10" max="600" step="10" />
@@ -863,7 +1083,7 @@ onUnmounted(() => {
           <span v-else>可手动输入，也可从当前 Endpoint 读取</span>
         </div>
         <div class="llm-secret-note">
-          {{ llmSettings.has_api_key ? t('settings.llm.keyFromEnv') : t('settings.llm.keyEnvHint') }}
+          配置保存到 <code>{{ modelConfigPath() }}</code>；API Key 留空会保留已有值，也可继续用 LLM_API_KEY 环境变量覆盖。
         </div>
       </div>
       <div class="llm-options llm-toggles">
@@ -1151,6 +1371,16 @@ onUnmounted(() => {
   min-width: 0;
 }
 .llm-form label.full { grid-column: 1 / -1; }
+.llm-form label.inline-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+}
+.llm-form label.inline-check input {
+  width: auto;
+  height: auto;
+}
 .llm-form label span,
 .llm-options label span {
   font-family: var(--mono);
@@ -1166,7 +1396,11 @@ onUnmounted(() => {
   color: var(--text-muted);
   font-size: 0.82rem;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
+.llm-secret-note code { color: var(--amber); font: 10px var(--mono); }
+.model-source-form { margin-bottom: 10px; }
+.model-config-actions { margin-bottom: 12px; }
 .llm-model-picker {
   grid-column: 1 / -1;
   display: flex;

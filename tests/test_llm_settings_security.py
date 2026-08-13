@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import json
 
 from app.api import llm as llm_api
 from app.config import LLMConfig
@@ -36,7 +37,9 @@ def test_plaintext_database_api_key_is_ignored(monkeypatch):
     assert cfg.api_key == "env-secret"
 
 
-def test_settings_endpoint_rejects_persisting_api_key():
+def test_settings_endpoint_persists_api_key_to_model_config_not_database(tmp_path, monkeypatch):
+    config_path = tmp_path / "model-settings.json"
+    monkeypatch.setenv("MODEL_SETTINGS_FILE", str(config_path))
     app = FastAPI()
     app.state.settings_repo = MemorySettings()
     app.include_router(llm_api.router)
@@ -54,8 +57,10 @@ def test_settings_endpoint_rejects_persisting_api_key():
         },
     )
 
-    assert response.status_code == 400
-    assert app.state.settings_repo.values == {}
+    assert response.status_code == 200
+    assert app.state.settings_repo.get("llm.api_key") is None
+    assert json.loads(config_path.read_text(encoding="utf-8"))["llm"]["api_key"] == "secret"
+    assert response.json()["has_api_key"] is True
 
 
 def _llm_app(values=None):

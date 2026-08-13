@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "asr": {
+    "provider": "modelscope",
+    "endpoint": "https://modelscope.cn",
+    "api_key": "",
+    "model": "sensevoice_zh",
+    "device": "auto",
+    "word_timestamps": false,
+    "load_timeout_sec": 90
+  },
+  "speaker": {
+    "provider": "modelscope",
+    "endpoint": "https://modelscope.cn",
+    "api_key": "",
+    "model": "campplus",
+    "device": "auto"
+  },
+  "diarization": {
+    "provider": "huggingface",
+    "endpoint": "https://huggingface.co",
+    "api_key": "",
+    "model": "pyannote/speaker-diarization-community-1",
+    "device": "auto"
+  },
+  "llm": {
+    "provider": "ollama",
+    "endpoint": "http://127.0.0.1:11434/v1",
+    "api_key": "",
+    "model": "qwen2.5:1.5b",
+    "enabled": false,
+    "allow_public": false,
+    "timeout_sec": 60,
+    "max_input_tokens": 8000,
+    "mock": false
+  }
+}

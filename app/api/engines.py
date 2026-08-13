@@ -1,8 +1,11 @@
 """Model catalog and speaker-engine selection API."""
 import asyncio
+import os
 from fastapi import APIRouter, HTTPException, Request
 
 from app.schemas.response import EngineSwitchRequest, EngineSwitchResponse, EnginesListResponse
+from app.api.settings import _write_env_values
+from app.services.model_config import apply_model_settings_to_runtime, update_model_section
 from engine.speaker.speaker_factory import get_engine_manager
 
 
@@ -41,6 +44,15 @@ async def switch_engine(body: EngineSwitchRequest, request: Request):
     result = await asyncio.to_thread(manager.switch_engine, body.engine_type)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "切换失败"))
+    try:
+        engine_type = result.get("engine_type") or body.engine_type
+        update_model_section("speaker", {"model": engine_type})
+        _write_env_values({"SPEAKER_ENGINE": engine_type})
+        os.environ["SPEAKER_ENGINE"] = engine_type
+        apply_model_settings_to_runtime()
+    except Exception:
+        # In-memory switching succeeded; persistence failure should not mask it.
+        pass
     new_engine = manager.get_engine()
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is not None:

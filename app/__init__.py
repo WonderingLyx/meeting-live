@@ -232,6 +232,10 @@ def _init_engines(app: FastAPI):
     引擎加载失败不应击穿整个 app:用降级模式(None 引擎)继续启动,
     /ready 自然返 not_ready,前端只读模式可用,而不是进程崩溃。
     """
+    from app.services.model_config import apply_model_settings_to_runtime
+
+    apply_model_settings_to_runtime()
+
     from engine.asr import get_asr_manager
     from engine.speaker import get_speaker_engine
 
