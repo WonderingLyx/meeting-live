@@ -27,6 +27,28 @@ def test_diarization_status_prefers_file_engine_over_stale_env(tmp_path, monkeyp
     assert status["model_id"] == "iic/SenseVoiceSmall + fsmn-vad + cam++"
 
 
+def test_configured_diarization_engine_prefers_file_over_stale_env(tmp_path, monkeypatch):
+    config_path = tmp_path / "model-settings.json"
+    config_path.write_text(
+        json.dumps({
+            "diarization": {
+                "engine": "funasr_campplus_cn_en",
+                "provider": "modelscope",
+                "endpoint": "https://modelscope.cn",
+                "model": "paraformer-zh + fsmn-vad + ct-punc + iic/speech_campplus_sv_zh_en_16k-common_advanced",
+                "device": "auto",
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_SETTINGS_FILE", str(config_path))
+    monkeypatch.setenv("DIARIZATION_ENGINE", "pyannote_community")
+
+    from app.services.pyannote_diarization import configured_diarization_engine
+
+    assert configured_diarization_engine() == "funasr_campplus_cn_en"
+
+
 def test_parse_json_diarization_output_ms_and_seconds():
     from app.services.pyannote_diarization import parse_diarization_output
 

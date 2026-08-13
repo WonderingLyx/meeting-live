@@ -233,15 +233,17 @@ def normalize_diarization_engine(engine_type: str | None) -> str:
 
 
 def configured_diarization_engine() -> str:
-    raw = os.environ.get("DIARIZATION_ENGINE")
-    if not raw:
-        try:
-            from app.services.model_config import read_model_settings
+    raw = ""
+    try:
+        from app.services.model_config import read_model_settings, section_has_file_config
 
-            settings = read_model_settings(include_env_secrets=True).get("diarization", {})
+        settings = read_model_settings(include_env_secrets=True).get("diarization", {})
+        if section_has_file_config("diarization"):
             raw = str(settings.get("engine") or "")
-        except Exception:
-            raw = ""
+        else:
+            raw = os.environ.get("DIARIZATION_ENGINE") or str(settings.get("engine") or "")
+    except Exception:
+        raw = os.environ.get("DIARIZATION_ENGINE") or ""
     return normalize_diarization_engine(raw)
 
 
@@ -269,9 +271,11 @@ def _diarization_settings() -> dict[str, Any]:
 
 def _diarization_command() -> str:
     settings = _diarization_settings()
+    if settings.get("command"):
+        return str(settings.get("command") or "").strip()
     return (
         os.environ.get("DIARIZATION_COMMAND")
-        or str(settings.get("command") or "")
+        or ""
     ).strip()
 
 
