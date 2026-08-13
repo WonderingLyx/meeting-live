@@ -31,6 +31,28 @@ def normalize_offline_asr_result(value: object, audio_duration: float) -> dict:
     return result
 
 
+def _diarization_provenance() -> dict[str, Any]:
+    try:
+        from app.services.pyannote_diarization import (
+            configured_diarization_engine,
+            get_diarization_engine_info,
+        )
+
+        engine = configured_diarization_engine()
+        info = get_diarization_engine_info(engine)
+        return {
+            "provider": info.get("provider") or engine,
+            "engine": engine,
+            "model": info.get("model"),
+        }
+    except Exception:
+        return {
+            "provider": "unknown",
+            "engine": "unknown",
+            "model": None,
+        }
+
+
 def merge_overlapping_text(previous: str, current: str, max_chars: int = 80) -> str:
     """Remove only an exact suffix/prefix overlap; never guess at fuzzy text."""
     previous = previous or ""
@@ -420,7 +442,7 @@ class MeetingProcessor:
                 "language": next(iter(observed_languages), None),
             },
             "diarization": {
-                "provider": "pyannote-community-1" if meeting.get("processing_mode") == "meeting" else None,
+                **(_diarization_provenance() if meeting.get("processing_mode") == "meeting" else {"provider": None, "engine": None, "model": None}),
                 "status": diarization_status if meeting.get("processing_mode") == "meeting" else "not_requested",
                 "alignment": alignment_method,
             },

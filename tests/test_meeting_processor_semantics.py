@@ -379,6 +379,14 @@ async def test_upload_meeting_publishes_text_draft_before_speaker_refinement(
             None,
         ),
     )
+    monkeypatch.setattr(
+        "app.services.meeting_processor._diarization_provenance",
+        lambda: {
+            "provider": "modelscope",
+            "engine": "funasr_campplus",
+            "model": "paraformer-zh + fsmn-vad + ct-punc + cam++",
+        },
+    )
 
     await processor({"id": "job-1", "meeting_id": "meeting-1"})
 
@@ -388,3 +396,5 @@ async def test_upload_meeting_publishes_text_draft_before_speaker_refinement(
     assert replacements[0][1] == {}
     assert replacements[1][0][0]["speaker_label"] == "SPEAKER_00"
     assert replacements[1][1]["processing_manifest"]["diarization"]["status"] == "completed"
+    assert replacements[1][1]["processing_manifest"]["diarization"]["engine"] == "funasr_campplus"
+    assert replacements[1][1]["processing_manifest"]["diarization"]["provider"] == "modelscope"
