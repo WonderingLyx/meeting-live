@@ -1,6 +1,32 @@
 import json
 
 
+def test_diarization_status_prefers_file_engine_over_stale_env(tmp_path, monkeypatch):
+    config_path = tmp_path / "model-settings.json"
+    config_path.write_text(
+        json.dumps({
+            "diarization": {
+                "engine": "funasr_sensevoice_campplus",
+                "provider": "modelscope",
+                "endpoint": "https://modelscope.cn",
+                "model": "iic/SenseVoiceSmall + fsmn-vad + cam++",
+                "device": "auto",
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_SETTINGS_FILE", str(config_path))
+    monkeypatch.setenv("DIARIZATION_ENGINE", "funasr_campplus")
+    monkeypatch.setenv("DIARIZATION_MODEL", "paraformer-zh + fsmn-vad + ct-punc + cam++")
+
+    from app.api.settings import _diarization_status
+
+    status = _diarization_status()
+
+    assert status["engine"] == "funasr_sensevoice_campplus"
+    assert status["model_id"] == "iic/SenseVoiceSmall + fsmn-vad + cam++"
+
+
 def test_parse_json_diarization_output_ms_and_seconds():
     from app.services.pyannote_diarization import parse_diarization_output
 

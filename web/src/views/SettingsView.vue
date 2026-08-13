@@ -1082,7 +1082,7 @@ onUnmounted(() => {
           v-for="key in diarizationEngineList"
           :key="key"
           class="eng-row"
-          :class="{ active: key === diarization.engine && diarization.enabled, switching: key === diarization.engine && (savingDiarization || testingDiarization), disabled: savingDiarization || testingDiarization }"
+          :class="{ active: key === diarization.engine, switching: key === diarization.engine && (savingDiarization || testingDiarization), disabled: savingDiarization || testingDiarization }"
           @click="pickDiarizationEngine(key)"
         >
           <div class="radio" />
@@ -1098,7 +1098,7 @@ onUnmounted(() => {
             <div class="m muted">{{ diarizationEngineDescription(diarizationEngines[key]) }}</div>
             <div class="m model-source">Model: {{ diarizationEngines[key]?.model || key }}</div>
           </div>
-          <span v-if="key === diarization.engine && diarization.enabled" class="pill">当前</span>
+          <span v-if="key === diarization.engine" class="pill">{{ diarization.enabled ? '当前' : '已选' }}</span>
           <span v-else-if="key === diarization.engine && (savingDiarization || testingDiarization)" class="pill">加载中</span>
         </div>
       </div>

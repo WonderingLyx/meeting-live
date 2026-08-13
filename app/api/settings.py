@@ -17,6 +17,7 @@ from app.services.model_config import (
     public_model_settings,
     read_raw_model_settings,
     read_model_settings,
+    section_has_file_config,
     update_model_section,
     write_model_settings,
 )
@@ -181,14 +182,17 @@ def _diarization_status(*, load: bool = False) -> dict[str, Any]:
             "terms_url": PYANNOTE_TERMS_URL,
             "token_url": HF_TOKEN_URL,
         }
+    has_diarization_file_config = section_has_file_config("diarization")
     engine = normalize_diarization_engine(
-        os.environ.get("DIARIZATION_ENGINE")
+        (diarization_settings.get("engine") if has_diarization_file_config else None)
+        or os.environ.get("DIARIZATION_ENGINE")
         or diarization_settings.get("engine")
         or DEFAULT_DIARIZATION_ENGINE
     )
     engine_info = get_diarization_engine_info(engine)
     model_id = (
-        os.environ.get("DIARIZATION_MODEL")
+        (diarization_settings.get("model") if has_diarization_file_config else None)
+        or os.environ.get("DIARIZATION_MODEL")
         or os.environ.get("PYANNOTE_MODEL")
         or diarization_settings.get("model")
         or engine_info.get("model")
@@ -240,8 +244,18 @@ def _diarization_status(*, load: bool = False) -> dict[str, Any]:
             if env_token
             else ("model-settings" if configured_token else ("env_file" if file_token else None))
         ),
-        "provider": diarization_settings.get("provider") or engine_info.get("provider") or "huggingface",
-        "endpoint": diarization_settings.get("endpoint") or os.environ.get("DIARIZATION_ENDPOINT") or os.environ.get("HF_ENDPOINT") or engine_info.get("endpoint") or "https://huggingface.co",
+        "provider": (
+            diarization_settings.get("provider")
+            or engine_info.get("provider")
+            or "huggingface"
+        ),
+        "endpoint": (
+            diarization_settings.get("endpoint")
+            or (None if has_diarization_file_config else os.environ.get("DIARIZATION_ENDPOINT"))
+            or os.environ.get("HF_ENDPOINT")
+            or engine_info.get("endpoint")
+            or "https://huggingface.co"
+        ),
         "api_key_configured": bool(env_token or configured_token or file_token),
         "api_key_preview": _mask_secret(env_token or configured_token or file_token),
         "config_path": public_model_settings()["config_path"],
