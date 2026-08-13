@@ -4,7 +4,7 @@ export interface ProcessingManifest {
   version?: number|string
   strategy?: string
   asr?: { engine?: string; model?: string; timestamp_granularity?: string; language?: string }
-  diarization?: { provider?: string; status?: string; alignment?: string }
+  diarization?: { provider?: string; engine?: string; model?: string; status?: string; alignment?: string }
   speaker_identity?: { engine?: string; model_id?: string }
   generated_at?: string
 }

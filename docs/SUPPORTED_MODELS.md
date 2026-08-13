@@ -35,6 +35,10 @@
 | 设置值 | 显示名 | 上游模型/接口 | 语言/场景 | 依赖 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | `funasr_campplus` | FunASR Paraformer + CAM++ | `paraformer-zh + fsmn-vad + ct-punc + cam++` | 中文会议优先 | `funasr`, `modelscope` | 本地自动下载；无需 Hugging Face gated 授权；属于 ASR 辅助 speaker 标签 |
+| `funasr_sensevoice_campplus` | FunASR SenseVoice + CAM++ | `iic/SenseVoiceSmall + fsmn-vad + cam++` | 中文/多语种对照 | `funasr`, `modelscope` | 本地自动下载；适合和 Paraformer 栈对照中文会议效果 |
+| `funasr_campplus_cn_en` | FunASR Paraformer + CAM++ CN/EN | `iic/speech_campplus_sv_zh_en_16k-common_advanced` | 中英混合会议 | `funasr`, `modelscope` | 本地自动下载；会议里夹杂英文时优先测试 |
+| `funasr_paraformer_large_campplus` | FunASR Paraformer Large + CAM++ | `iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch + cam++` | 中文离线高质量对照 | `funasr`, `modelscope` | 本地自动下载；比默认栈更慢，适合离线对比 |
+| `funasr_eres2netv2` | FunASR Paraformer + ERes2NetV2 | `iic/speech_eres2netv2_sv_zh-cn_16k-common` | 中文实验对照 | `funasr`, `modelscope` | 实验项；通过 FunASR `spk_model` 接 3D-Speaker 声纹模型，需以本机加载测试为准 |
 | `pyannote_community` | pyannote Community-1 | `pyannote/speaker-diarization-community-1` | 多语种完整录音 | `pyannote.audio`, `HF_TOKEN` | 准确率基线强；需要接受 Hugging Face 模型条款 |
 | `pyannote_custom` | pyannote Custom Pipeline | 自定义 pyannote pipeline/model id | 多语种对照测试 | `pyannote.audio`, `HF_TOKEN` | 用于测试 `pyannote/speaker-diarization-3.1` 等其它 pipeline |
 | `sherpa_onnx_cli` | sherpa-onnx / external CLI | 本地命令输出 JSON 或 RTTM | 取决于本地模型 | 外部命令 | 用来接 sherpa-onnx、3D-Speaker 或其它离线分离程序 |
@@ -55,5 +59,7 @@
 ## 中文会议推荐顺序
 
 1. 先试 `funasr_campplus`：对中文友好，沿用项目已有 FunASR 依赖和 ModelScope 缓存，不需要 HF_TOKEN。
-2. 再试 `pyannote_community`：分离能力强，但需要 Hugging Face gated 模型授权；AMD Windows ROCm 环境下建议先用 CPU 验证。
-3. 需要 ONNX/纯本地命令时用 `sherpa_onnx_cli`：命令里可用 `{input}` 和 `{output}` 占位符，输出 JSON 或 RTTM 即可接入。
+2. 中文 ASR 效果不稳定时试 `funasr_sensevoice_campplus`；中英混合会议试 `funasr_campplus_cn_en`。
+3. 离线对比精度时试 `funasr_paraformer_large_campplus`；`funasr_eres2netv2` 是实验项，先用设置页“测试连接/加载”确认本机 FunASR 支持。
+4. 再试 `pyannote_community`：分离能力强，但需要 Hugging Face gated 模型授权；AMD Windows ROCm 环境下建议先用 CPU 验证。
+5. 需要 ONNX/纯本地命令时用 `sherpa_onnx_cli`：命令里可用 `{input}` 和 `{output}` 占位符，输出 JSON 或 RTTM 即可接入。

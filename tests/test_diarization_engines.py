@@ -33,5 +33,21 @@ def test_diarization_engine_catalog_contains_local_backends():
 
     assert "funasr_campplus" in engines
     assert engines["funasr_campplus"]["provider"] == "modelscope"
+    assert "funasr_sensevoice_campplus" in engines
+    assert engines["funasr_sensevoice_campplus"]["runtime"] == "funasr"
+    assert "funasr_campplus_cn_en" in engines
+    assert "speech_campplus_sv_zh_en" in engines["funasr_campplus_cn_en"]["model"]
+    assert "funasr_paraformer_large_campplus" in engines
+    assert "funasr_eres2netv2" in engines
+    assert engines["funasr_eres2netv2"]["experimental"] is True
     assert "sherpa_onnx_cli" in engines
     assert engines["sherpa_onnx_cli"]["dependency"] == "external_command"
+
+
+def test_diarization_engine_aliases_cover_added_funasr_models():
+    from app.services.pyannote_diarization import normalize_diarization_engine
+
+    assert normalize_diarization_engine("sensevoice_campplus") == "funasr_sensevoice_campplus"
+    assert normalize_diarization_engine("campplus-cn-en") == "funasr_campplus_cn_en"
+    assert normalize_diarization_engine("paraformer-large-campplus") == "funasr_paraformer_large_campplus"
+    assert normalize_diarization_engine("eres2netv2") == "funasr_eres2netv2"

@@ -211,10 +211,11 @@ def _diarization_status(*, load: bool = False) -> dict[str, Any]:
                 enabled = bool(PyannoteDiarizer._enabled)
                 last_error = PyannoteDiarizer._last_error
                 loaded_device = PyannoteDiarizer._device
-            elif engine == "funasr_campplus":
-                enabled = bool(FunASRCampPlusDiarizer._enabled)
-                last_error = FunASRCampPlusDiarizer._last_error
-                loaded_device = FunASRCampPlusDiarizer._device
+            elif engine_info.get("runtime") == "funasr":
+                state = FunASRCampPlusDiarizer.state_for(engine)
+                enabled = bool(state.get("enabled"))
+                last_error = state.get("last_error")
+                loaded_device = str(state.get("device") or "cpu")
             else:
                 enabled = bool(CommandDiarizer._enabled)
                 last_error = CommandDiarizer._last_error
@@ -719,12 +720,20 @@ async def update_diarization_settings(body: DiarizationSettingsRequest):
     current = read_model_settings(include_env_secrets=True).get("diarization", {})
     engine = normalize_diarization_engine(body.engine or current.get("engine"))
     engine_info = get_diarization_engine_info(engine)
-    model_id = (
-        body.model_id
-        or current.get("model")
-        or engine_info.get("model")
-        or default_diarization_model(engine)
-    ).strip() or default_diarization_model(engine)
+    previous_engine = normalize_diarization_engine(current.get("engine"))
+    requested_model = (body.model_id or "").strip()
+    current_model = str(current.get("model") or "").strip()
+    if body.engine and engine != previous_engine and (not requested_model or requested_model == current_model):
+        model_id = str(engine_info.get("model") or default_diarization_model(engine))
+    elif requested_model:
+        model_id = requested_model
+    else:
+        model_id = str(
+            current.get("model")
+            or engine_info.get("model")
+            or default_diarization_model(engine)
+        )
+    model_id = model_id.strip() or default_diarization_model(engine)
     token = (body.api_key or body.hf_token or "").strip()
     provider = (body.provider or current.get("provider") or engine_info.get("provider") or "huggingface").strip()
     endpoint = (body.endpoint or current.get("endpoint") or engine_info.get("endpoint") or "").strip()

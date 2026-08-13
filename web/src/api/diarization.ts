@@ -38,11 +38,13 @@ export interface DiarizationEngineInfo {
   requires_token?: boolean
   token_env?: string
   local_after_download?: boolean
+  runtime?: string
   languages?: string
   languages_en?: string
   description?: string
   description_en?: string
   recommended_for?: string[]
+  experimental?: boolean
   terms_url?: string
 }
 

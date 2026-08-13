@@ -237,7 +237,16 @@ const diarizationEngines = computed<Record<string, DiarizationEngineInfo>>(() =>
   return Object.keys(fromSettings).length ? fromSettings : fromModelConfig
 })
 const diarizationEngineList = computed(() => {
-  const order = ['funasr_campplus', 'pyannote_community', 'pyannote_custom', 'sherpa_onnx_cli']
+  const order = [
+    'funasr_campplus',
+    'funasr_sensevoice_campplus',
+    'funasr_campplus_cn_en',
+    'funasr_paraformer_large_campplus',
+    'funasr_eres2netv2',
+    'pyannote_community',
+    'pyannote_custom',
+    'sherpa_onnx_cli',
+  ]
   const engines = diarizationEngines.value
   return [...order.filter((k) => engines[k]), ...Object.keys(engines).filter((k) => !order.includes(k))]
 })
@@ -276,7 +285,7 @@ function onDiarizationEngineChange() {
   if (!info) return
   diarization.value.provider = info.provider || diarization.value.provider || 'huggingface'
   diarization.value.endpoint = info.endpoint || diarization.value.endpoint || ''
-  diarization.value.model_id = info.model || diarization.value.model_id
+  diarization.value.model_id = info.model || ''
   if (diarization.value.engine !== 'sherpa_onnx_cli') {
     diarization.value.command = ''
   }

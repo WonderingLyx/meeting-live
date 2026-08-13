@@ -25,6 +25,15 @@
     "command": "",
     "device": "auto"
   },
+  "diarization_funasr_sensevoice_example": {
+    "engine": "funasr_sensevoice_campplus",
+    "provider": "modelscope",
+    "endpoint": "https://modelscope.cn",
+    "api_key": "",
+    "model": "iic/SenseVoiceSmall + fsmn-vad + cam++",
+    "command": "",
+    "device": "auto"
+  },
   "diarization_pyannote_example": {
     "engine": "pyannote_community",
     "provider": "huggingface",

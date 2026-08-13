@@ -41,6 +41,104 @@ DEFAULT_PYANNOTE_MODEL = "pyannote/speaker-diarization-community-1"
 DEFAULT_PYANNOTE_REVISION = "3533c8cf8e369892e6b79ff1bf80f7b0286a54ee"
 DEFAULT_FUNASR_DIARIZATION_MODEL = "paraformer-zh + fsmn-vad + ct-punc + cam++"
 
+_FUNASR_DIARIZATION_COMMON: dict[str, Any] = {
+    "provider": "modelscope",
+    "endpoint": "https://modelscope.cn",
+    "dependency": "funasr",
+    "token_env": "MODELSCOPE_API_TOKEN",
+    "requires_token": False,
+    "local_after_download": True,
+    "runtime": "funasr",
+    "vad_kwargs": {"max_single_segment_time": 30000},
+    "batch_size_s": 60,
+    "merge_length_s": 15,
+}
+
+
+FUNASR_DIARIZATION_PROFILES: dict[str, dict[str, Any]] = {
+    "funasr_campplus": {
+        **_FUNASR_DIARIZATION_COMMON,
+        "type": "funasr_campplus",
+        "name": "FunASR Paraformer + CAM++",
+        "model": DEFAULT_FUNASR_DIARIZATION_MODEL,
+        "funasr_model": "paraformer-zh",
+        "funasr_vad_model": "fsmn-vad",
+        "funasr_punc_model": "ct-punc",
+        "funasr_spk_model": "cam++",
+        "languages": "中文",
+        "languages_en": "Chinese",
+        "description": "中文友好的本地 ASR 辅助说话人标签，复用 FunASR/ModelScope 自动下载链路。",
+        "description_en": "Chinese-friendly local ASR-assisted speaker labels using FunASR CAM++.",
+        "recommended_for": ["chinese_meeting_upload", "no_hf_token", "fast_baseline"],
+    },
+    "funasr_sensevoice_campplus": {
+        **_FUNASR_DIARIZATION_COMMON,
+        "type": "funasr_sensevoice_campplus",
+        "name": "FunASR SenseVoice + CAM++",
+        "model": "iic/SenseVoiceSmall + fsmn-vad + cam++",
+        "funasr_model": "iic/SenseVoiceSmall",
+        "funasr_vad_model": "fsmn-vad",
+        "funasr_punc_model": None,
+        "funasr_spk_model": "cam++",
+        "language": "zh",
+        "batch_size_s": 300,
+        "languages": "中文/多语种",
+        "languages_en": "Chinese / multilingual",
+        "description": "SenseVoice 转写叠加 CAM++ 说话人标签，适合和 Paraformer 栈对照中文会议效果。",
+        "description_en": "SenseVoice transcription with separate CAM++ speaker labels; useful when Paraformer punctuation/timestamps are unstable.",
+        "recommended_for": ["chinese_meeting_upload", "sensevoice_compare", "cpu_baseline"],
+    },
+    "funasr_campplus_cn_en": {
+        **_FUNASR_DIARIZATION_COMMON,
+        "type": "funasr_campplus_cn_en",
+        "name": "FunASR Paraformer + CAM++ CN/EN",
+        "model": "paraformer-zh + fsmn-vad + ct-punc + iic/speech_campplus_sv_zh_en_16k-common_advanced",
+        "funasr_model": "paraformer-zh",
+        "funasr_vad_model": "fsmn-vad",
+        "funasr_punc_model": "ct-punc",
+        "funasr_spk_model": "iic/speech_campplus_sv_zh_en_16k-common_advanced",
+        "funasr_spk_model_revision": "v1.0.0",
+        "languages": "中文/英文",
+        "languages_en": "Chinese / English",
+        "description": "中英双语 CAM++ 说话人模型，适合普通话会议里夹杂英文的场景。",
+        "description_en": "Chinese-English CAM++ speaker model for mixed Chinese/English meetings.",
+        "recommended_for": ["mixed_chinese_english", "chinese_meeting_upload"],
+    },
+    "funasr_eres2netv2": {
+        **_FUNASR_DIARIZATION_COMMON,
+        "type": "funasr_eres2netv2",
+        "name": "FunASR Paraformer + ERes2NetV2",
+        "model": "paraformer-zh + fsmn-vad + ct-punc + iic/speech_eres2netv2_sv_zh-cn_16k-common",
+        "funasr_model": "paraformer-zh",
+        "funasr_vad_model": "fsmn-vad",
+        "funasr_punc_model": "ct-punc",
+        "funasr_spk_model": "iic/speech_eres2netv2_sv_zh-cn_16k-common",
+        "funasr_spk_model_revision": "v1.0.2",
+        "languages": "中文",
+        "languages_en": "Chinese",
+        "description": "实验项：通过 FunASR speaker-tag 流程接入 3D-Speaker ERes2NetV2 声纹模型。",
+        "description_en": "Experimental 3D-Speaker ERes2NetV2 speaker model through the FunASR speaker-tag pipeline.",
+        "recommended_for": ["chinese_high_quality", "offline_compare", "experimental"],
+        "experimental": True,
+    },
+    "funasr_paraformer_large_campplus": {
+        **_FUNASR_DIARIZATION_COMMON,
+        "type": "funasr_paraformer_large_campplus",
+        "name": "FunASR Paraformer Large + CAM++",
+        "model": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch + fsmn-vad + ct-punc + cam++",
+        "funasr_model": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+        "funasr_vad_model": "fsmn-vad",
+        "funasr_punc_model": "ct-punc",
+        "funasr_spk_model": "cam++",
+        "languages": "中文",
+        "languages_en": "Chinese",
+        "description": "Paraformer Large 前端叠加 CAM++ 说话人标签，比默认栈更慢，适合离线高质量对照。",
+        "description_en": "Higher-quality Paraformer ASR front-end with CAM++ speaker labels; slower than the default stack.",
+        "recommended_for": ["chinese_high_quality", "offline_compare"],
+    },
+}
+
+
 DIARIZATION_ENGINE_CONFIG: dict[str, dict[str, Any]] = {
     "pyannote_community": {
         "type": "pyannote_community",
@@ -76,22 +174,7 @@ DIARIZATION_ENGINE_CONFIG: dict[str, dict[str, Any]] = {
         "recommended_for": ["pyannote_ab_test"],
         "terms_url": "https://huggingface.co/pyannote/speaker-diarization-3.1",
     },
-    "funasr_campplus": {
-        "type": "funasr_campplus",
-        "name": "FunASR Paraformer + CAM++",
-        "provider": "modelscope",
-        "endpoint": "https://modelscope.cn",
-        "model": DEFAULT_FUNASR_DIARIZATION_MODEL,
-        "dependency": "funasr",
-        "token_env": "MODELSCOPE_API_TOKEN",
-        "requires_token": False,
-        "local_after_download": True,
-        "languages": "中文",
-        "languages_en": "Chinese",
-        "description": "中文友好的本地 ASR 辅助说话人标签，复用 FunASR/ModelScope 自动下载链路。",
-        "description_en": "Chinese-friendly local ASR-assisted speaker labels using FunASR/ModelScope downloads.",
-        "recommended_for": ["chinese_meeting_upload", "no_hf_token"],
-    },
+    **FUNASR_DIARIZATION_PROFILES,
     "sherpa_onnx_cli": {
         "type": "sherpa_onnx_cli",
         "name": "sherpa-onnx / external CLI",
@@ -111,6 +194,7 @@ DIARIZATION_ENGINE_CONFIG: dict[str, dict[str, Any]] = {
 }
 
 _PYANNOTE_ENGINES = {"pyannote", "pyannote_community", "pyannote_custom"}
+_FUNASR_DIARIZATION_ENGINES = set(FUNASR_DIARIZATION_PROFILES)
 
 
 def _pyannote_model_id() -> str:
@@ -131,6 +215,16 @@ def normalize_diarization_engine(engine_type: str | None) -> str:
         "funasr": "funasr_campplus",
         "funasr_spk": "funasr_campplus",
         "paraformer_spk": "funasr_campplus",
+        "paraformer_campplus": "funasr_campplus",
+        "sensevoice_spk": "funasr_sensevoice_campplus",
+        "sensevoice_campplus": "funasr_sensevoice_campplus",
+        "funasr_sensevoice": "funasr_sensevoice_campplus",
+        "campplus_cn_en": "funasr_campplus_cn_en",
+        "funasr_cn_en": "funasr_campplus_cn_en",
+        "eres2net": "funasr_eres2netv2",
+        "eres2netv2": "funasr_eres2netv2",
+        "paraformer_large_campplus": "funasr_paraformer_large_campplus",
+        "funasr_paraformer_large": "funasr_paraformer_large_campplus",
         "sherpa": "sherpa_onnx_cli",
         "sherpa_onnx": "sherpa_onnx_cli",
         "external": "sherpa_onnx_cli",
@@ -613,18 +707,30 @@ class PyannoteDiarizer:
 class FunASRCampPlusDiarizer:
     """FunASR ASR-assisted speaker diarization for Chinese meetings."""
 
-    _instance = None
-    _model = None
-    _enabled = False
-    _last_error = None
-    _device = "cpu"
+    _instances: dict[str, "FunASRCampPlusDiarizer"] = {}
+    _state: dict[str, dict[str, Any]] = {}
 
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+    def __new__(cls, engine_type: str | None = None):
+        engine = normalize_diarization_engine(engine_type or configured_diarization_engine())
+        if engine not in _FUNASR_DIARIZATION_ENGINES:
+            engine = "funasr_campplus"
+        if engine not in cls._instances:
+            cls._instances[engine] = super().__new__(cls)
+        return cls._instances[engine]
 
-    def __init__(self):
+    def __init__(self, engine_type: str | None = None):
+        engine = normalize_diarization_engine(engine_type or configured_diarization_engine())
+        if engine not in _FUNASR_DIARIZATION_ENGINES:
+            engine = "funasr_campplus"
+        if getattr(self, "_initialized", False):
+            return
+        self.engine_type = engine
+        self.info = DIARIZATION_ENGINE_CONFIG[engine]
+        self._model = None
+        self._enabled = False
+        self._last_error = None
+        self._device = "cpu"
+        self._initialized = True
         if self._model is not None:
             return
         self._last_error = None
@@ -633,6 +739,7 @@ class FunASRCampPlusDiarizer:
         except Exception as exc:
             self._enabled = False
             self._last_error = f"FunASR 未安装或无法加载: {exc}"
+            self._record_state()
             logger.warning("[DIARIZATION:FunASR] %s", self._last_error)
             return
 
@@ -644,25 +751,98 @@ class FunASRCampPlusDiarizer:
         old_ms_cache = os.environ.get("MODELSCOPE_CACHE")
         os.environ["MODELSCOPE_CACHE"] = cache
         try:
-            logger.info("[DIARIZATION:FunASR] loading %s device=%s cache=%s", DEFAULT_FUNASR_DIARIZATION_MODEL, self._device, cache)
-            self._model = AutoModel(
-                model="paraformer-zh",
-                vad_model="fsmn-vad",
-                punc_model="ct-punc",
-                spk_model="cam++",
-                vad_kwargs={"max_single_segment_time": 30000},
-                device=self._device,
+            model_kwargs = self._model_kwargs()
+            logger.info(
+                "[DIARIZATION:%s] loading %s device=%s cache=%s",
+                self.engine_type,
+                self.info.get("model"),
+                self._device,
+                cache,
             )
+            self._model = self._build_automodel(AutoModel, model_kwargs)
             self._enabled = True
         except Exception as exc:
             self._enabled = False
-            self._last_error = f"FunASR CAM++ 加载失败: {exc}"
-            logger.error("[DIARIZATION:FunASR] %s", self._last_error)
+            self._last_error = f"{self.info.get('name') or self.engine_type} 加载失败: {exc}"
+            logger.error("[DIARIZATION:%s] %s", self.engine_type, self._last_error)
         finally:
+            self._record_state()
             if old_ms_cache is None:
                 os.environ.pop("MODELSCOPE_CACHE", None)
             else:
                 os.environ["MODELSCOPE_CACHE"] = old_ms_cache
+
+    def _model_kwargs(self) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "model": self.info.get("funasr_model") or "paraformer-zh",
+            "device": self._device,
+            "disable_update": True,
+        }
+        if self.info.get("funasr_vad_model"):
+            kwargs["vad_model"] = self.info["funasr_vad_model"]
+        if self.info.get("funasr_punc_model"):
+            kwargs["punc_model"] = self.info["funasr_punc_model"]
+        if self.info.get("funasr_spk_model"):
+            kwargs["spk_model"] = self.info["funasr_spk_model"]
+        if self.info.get("funasr_spk_model_revision"):
+            kwargs["spk_model_revision"] = self.info["funasr_spk_model_revision"]
+        if self.info.get("vad_kwargs"):
+            kwargs["vad_kwargs"] = dict(self.info["vad_kwargs"])
+        return kwargs
+
+    def _build_automodel(self, AutoModel: Any, model_kwargs: dict[str, Any]) -> Any:
+        kwargs = dict(model_kwargs)
+        optional_keys = ("disable_update", "spk_model_revision")
+        while True:
+            try:
+                return AutoModel(**kwargs)
+            except TypeError as exc:
+                message = str(exc)
+                removable = next((key for key in optional_keys if key in kwargs and key in message), None)
+                if not removable:
+                    raise
+                logger.info(
+                    "[DIARIZATION:%s] AutoModel does not accept %s; retrying without it",
+                    self.engine_type,
+                    removable,
+                )
+                kwargs.pop(removable, None)
+
+    def _generate_kwargs(self, audio_input: np.ndarray) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "input": audio_input,
+            "batch_size_s": int(self.info.get("batch_size_s") or 60),
+            "merge_vad": True,
+            "merge_length_s": int(self.info.get("merge_length_s") or 15),
+        }
+        if self.info.get("language"):
+            kwargs["language"] = self.info["language"]
+        if self.info.get("funasr_model") == "iic/SenseVoiceSmall":
+            kwargs["use_itn"] = True
+        return kwargs
+
+    def _record_state(self) -> None:
+        self.__class__._state[self.engine_type] = {
+            "enabled": bool(self._enabled),
+            "last_error": self._last_error,
+            "device": self._device,
+            "model": self.info.get("model"),
+        }
+
+    @classmethod
+    def state_for(cls, engine_type: str | None = None) -> dict[str, Any]:
+        engine = normalize_diarization_engine(engine_type or configured_diarization_engine())
+        return dict(cls._state.get(engine) or {
+            "enabled": False,
+            "last_error": None,
+            "device": "cpu",
+            "model": DIARIZATION_ENGINE_CONFIG.get(engine, {}).get("model"),
+        })
+
+    @classmethod
+    def reset(cls) -> None:
+        cls._instances = {}
+        cls._state = {}
 
     @property
     def enabled(self) -> bool:
@@ -707,22 +887,19 @@ class FunASRCampPlusDiarizer:
                 if int(sample_rate or 16000) != 16000:
                     audio_input = librosa.resample(audio_input, orig_sr=int(sample_rate or 16000), target_sr=16000)
 
-            result = self._model.generate(
-                input=audio_input,
-                batch_size_s=60,
-                merge_vad=True,
-                merge_length_s=15,
-            )
+            result = self._model.generate(**self._generate_kwargs(audio_input))
             turns = self._turns_from_funasr_result(result)
             if not turns:
-                self._last_error = "FunASR 未返回 speaker 标签；确认 spk_model=cam++ 是否成功下载/加载"
+                self._last_error = f"{self.engine_type} 未返回 speaker 标签；请确认 spk_model={self.info.get('funasr_spk_model')} 已成功下载/加载"
             else:
                 self._last_error = None
-            logger.info("[DIARIZATION:FunASR] %s: %d turns, %d speakers", audio_path, len(turns), len({t[2] for t in turns}))
+            self._record_state()
+            logger.info("[DIARIZATION:%s] %s: %d turns, %d speakers", self.engine_type, audio_path, len(turns), len({t[2] for t in turns}))
             return turns
         except Exception as exc:
-            self._last_error = f"FunASR CAM++ 分离失败: {exc}"
-            logger.error("[DIARIZATION:FunASR] %s", self._last_error)
+            self._last_error = f"{self.info.get('name') or self.engine_type} 分离失败: {exc}"
+            self._record_state()
+            logger.error("[DIARIZATION:%s] %s", self.engine_type, self._last_error)
             return []
 
     @classmethod
@@ -837,8 +1014,8 @@ def get_diarization_engine():
     engine = configured_diarization_engine()
     if engine in _PYANNOTE_ENGINES:
         return PyannoteDiarizer()
-    if engine == "funasr_campplus":
-        return FunASRCampPlusDiarizer()
+    if engine in _FUNASR_DIARIZATION_ENGINES:
+        return FunASRCampPlusDiarizer(engine)
     if engine == "sherpa_onnx_cli":
         return CommandDiarizer()
     fallback = CommandDiarizer()
@@ -858,11 +1035,7 @@ def reset_pyannote_diarizer() -> None:
 
 def reset_diarization_engine() -> None:
     reset_pyannote_diarizer()
-    FunASRCampPlusDiarizer._instance = None
-    FunASRCampPlusDiarizer._model = None
-    FunASRCampPlusDiarizer._enabled = False
-    FunASRCampPlusDiarizer._last_error = None
-    FunASRCampPlusDiarizer._device = "cpu"
+    FunASRCampPlusDiarizer.reset()
     CommandDiarizer._instance = None
     CommandDiarizer._enabled = False
     CommandDiarizer._last_error = None
