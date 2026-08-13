@@ -460,7 +460,12 @@ async function saveLlmConfig() {
   if (!llmSettings.value) return
   try {
     savingLlm.value = true
-    await saveLlmSettings(llmSettings.value)
+    const payload = {
+      ...llmSettings.value,
+      timeout_sec: Math.max(10, Math.min(600, Number(llmSettings.value.timeout_sec) || 120)),
+      max_input_tokens: Math.max(500, Math.min(200000, Number(llmSettings.value.max_input_tokens) || 8000)),
+    }
+    await saveLlmSettings(payload)
     llm.value = await getLlmStatus()
     llmSettings.value = await getLlmSettings()
     window.toast?.(t('settings.llm.savedPassive') || 'LLM 配置已保存，未发起连接测试', 'ok')
@@ -840,6 +845,14 @@ onUnmounted(() => {
         <label class="full">
           <span>Endpoint</span>
           <input v-model.trim="llmSettings.endpoint" placeholder="http://127.0.0.1:11434/v1" />
+        </label>
+        <label>
+          <span>Timeout 秒</span>
+          <input v-model.number="llmSettings.timeout_sec" type="number" min="10" max="600" step="10" />
+        </label>
+        <label>
+          <span>输入上限 tokens</span>
+          <input v-model.number="llmSettings.max_input_tokens" type="number" min="500" max="200000" step="500" />
         </label>
         <div class="llm-model-picker">
           <button class="btn ghost sm" type="button" :disabled="loadingLlmModels" @click="refreshLlmModels(true)">

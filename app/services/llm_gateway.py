@@ -201,10 +201,7 @@ class LLMGateway:
 
         超长处理:transcript token 估算 > max_input_tokens*0.95 时走 map-reduce
         (分块按 segment 边界不切断 turn,各块单独摘要,合并阶段再生成总摘要)。
-        1 小时会议(~1万字,估算 ~7300 token)在默认 max_input_tokens=8000 下
-        7300 < 7600 不触发单次调用;十几万字超长才分块。
-        注:token 估算用 len/1.5 偏保守乐观(实际中文可能更多 token),
-        若模型 context 真装不下会由 LLM 报错降级 extractive 兜底。
+        中文按接近 1 字/token 估算,避免中文会议长稿误走单次调用导致本地模型超时。
         """
         # 1. 尝试 LLM
         if self.config.enabled:
@@ -216,32 +213,36 @@ class LLMGateway:
                 # 见 _adaptive_max_words:短~120/中~200/长~300/超长~400 字。
                 if op == "summarize" and "max_words" not in kwargs:
                     kwargs["max_words"] = self._adaptive_max_words(segments)
-                # 短文本直接发;超长走 map-reduce(按 segment 边界分块)。
-                # 阈值用 0.95 而非 0.8:1 小时会议(~1万字含前缀≈7300 token)
-                # 在默认 max_input_tokens=8000 下应落回单次,只在真正超长(>7600)
-                # 才分块。0.8 会让 1 小时会议误触发(用户明确不希望日常多调用)。
-                if self._est_tokens(transcript) <= self.config.max_input_tokens * 0.95:
-                    text = await self._llm_single_call(op, transcript, kwargs)
-                    return text, "llm"
-                chunks = self._split_segments(segments, self.config.max_input_tokens * 0.7)
-                if len(chunks) <= 1:
-                    # 估算偏保守导致单块(分不出多块),直接发
-                    text = await self._llm_single_call(op, transcript, kwargs)
-                    return text, "llm"
-                logger.info(f"[LLM] 转写超长({self._est_tokens(transcript):.0f} token),"
-                            f"map-reduce 分 {len(chunks)} 块")
-                chunk_texts = []
-                for i, chunk in enumerate(chunks):
-                    chunk_transcript = self._segments_to_text(chunk)
-                    # 块摘要:压缩 max_words 避免块摘要总和过长
-                    chunk_kwargs = dict(kwargs)
-                    if "max_words" in chunk_kwargs:
-                        chunk_kwargs["max_words"] = max(100, chunk_kwargs["max_words"] // 2)
-                    chunk_texts.append(await self._llm_single_call(op, chunk_transcript, chunk_kwargs))
-                # 合并阶段:各块摘要拼接再生成总摘要
-                merged = "\n\n".join(f"[分块{i+1}]\n{t}" for i, t in enumerate(chunk_texts))
-                text = await self._llm_single_call(op, merged, kwargs)
-                return text, "llm-mapreduce"
+                transcript_tokens = self._est_tokens(transcript)
+                if transcript_tokens <= self.config.max_input_tokens * 0.95:
+                    try:
+                        text = await self._llm_single_call(op, transcript, kwargs)
+                        return text, "llm"
+                    except LLMTimeoutError:
+                        if self._can_map_reduce(op, segments):
+                            logger.warning(
+                                "[LLM] 单次生成超时,尝试 map-reduce 分块重试: "
+                                "%.0f token, timeout=%ss",
+                                transcript_tokens,
+                                self.config.timeout_sec,
+                            )
+                            return await self._map_reduce(
+                                op,
+                                segments,
+                                kwargs,
+                                chunk_token_budget=max(1, self.config.max_input_tokens * 0.35),
+                            )
+                        raise
+                if self._can_map_reduce(op, segments):
+                    return await self._map_reduce(
+                        op,
+                        segments,
+                        kwargs,
+                        chunk_token_budget=max(1, self.config.max_input_tokens * 0.35),
+                    )
+                # 单段超长无法按 segment 分块,只能直发并由调用错误触发兜底。
+                text = await self._llm_single_call(op, transcript, kwargs)
+                return text, "llm"
             except (LLMUnavailableError, LLMTimeoutError, LLMModelMissingError) as e:
                 logger.warning(f"[LLM] 失败,降级到 extractive: {e}")
             except Exception as e:
@@ -254,6 +255,41 @@ class LLMGateway:
             content = "\n".join(f"- {item}" for item in items) if items else f"- {NO_ACTIONS}"
             return content, "extractive-fallback"
         return self._extractive_fallback(op, segments, **kwargs), "extractive-fallback"
+
+    async def _map_reduce(
+        self,
+        op: str,
+        segments: list[dict],
+        kwargs: dict,
+        *,
+        chunk_token_budget: float,
+    ) -> tuple[str, str]:
+        chunks = self._split_segments(segments, chunk_token_budget)
+        if len(chunks) <= 1:
+            transcript = self._segments_to_text(segments)
+            text = await self._llm_single_call(op, transcript, kwargs)
+            return text, "llm"
+        transcript = self._segments_to_text(segments)
+        logger.info(
+            "[LLM] 转写较长(%.0f token),map-reduce 分 %s 块(chunk_budget=%.0f)",
+            self._est_tokens(transcript),
+            len(chunks),
+            chunk_token_budget,
+        )
+        chunk_texts = []
+        for i, chunk in enumerate(chunks):
+            chunk_transcript = self._segments_to_text(chunk)
+            chunk_kwargs = dict(kwargs)
+            if "max_words" in chunk_kwargs:
+                chunk_kwargs["max_words"] = max(100, chunk_kwargs["max_words"] // 2)
+            chunk_texts.append(await self._llm_single_call(op, chunk_transcript, chunk_kwargs))
+        merged = "\n\n".join(f"[分块{i+1}]\n{t}" for i, t in enumerate(chunk_texts))
+        text = await self._llm_single_call(op, merged, kwargs)
+        return text, "llm-mapreduce"
+
+    @staticmethod
+    def _can_map_reduce(op: str, segments: list[dict]) -> bool:
+        return op in {"summarize", "minutes"} and len(segments) > 1
 
     async def _llm_single_call(self, op: str, transcript: str, kwargs: dict) -> str:
         """渲染 prompt(用 str.replace 防转写花括号触发 KeyError)+ 单次 _call_llm。"""
@@ -280,9 +316,19 @@ class LLMGateway:
 
     @staticmethod
     def _est_tokens(text: str) -> float:
-        """token 估算:中文 ~1.5 字/token,英文 ~4 字/token。用 /1.5 偏保守
-        (多估 token),保证不超 max_input_tokens。"""
-        return len(text) / 1.5
+        """Conservative token estimate for routing long transcripts.
+
+        Chinese meeting transcripts are close to one character per token for
+        many Qwen-compatible tokenizers.  The old len/1.5 estimate was too
+        optimistic and sent long Chinese meetings as a single request, which is
+        slow enough to hit local 60s timeouts.
+        """
+        if not text:
+            return 0.0
+        cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+        if cjk / max(1, len(text)) >= 0.2:
+            return len(text) / 1.05
+        return len(text) / 4.0
 
     @staticmethod
     def _estimate_meeting_duration(segments: list[dict]) -> float:

@@ -560,10 +560,8 @@ def test_render_prompt_without_max_words():
 
 # ========== map-reduce 超长摘要 ==========
 
-def test_one_hour_meeting_does_not_trigger_mapreduce(monkeypatch):
-    """回归:默认 max_input_tokens=8000 下,1 小时会议(~100 段 100 字)
-    不触发 map-reduce(单次调用)。阈值 0.95 让日常会议落回单次路径。
-    """
+def test_one_hour_chinese_meeting_triggers_mapreduce(monkeypatch):
+    """中文会议按接近 1 字/token 估算,长稿应分块避免本地模型超时。"""
     import app.services.llm_gateway as gw_mod
     call_count = {"n": 0}
 
@@ -587,10 +585,40 @@ def test_one_hour_meeting_does_not_trigger_mapreduce(monkeypatch):
 
     cfg = LLMConfig(enabled=True, endpoint="http://127.0.0.1:11434/v1", max_input_tokens=8000)
     gw = LLMGateway(cfg)
-    # 1 小时会议典型量:100 段 × 100 字,加 [spk] 前缀 ≈ 10989 字符 ≈ 7326 token < 7600
-    segs = [{"text": "x" * 100, "speaker_id": "Spk_1"} for _ in range(100)]
+    segs = [{"text": "这是中文会议转写内容。" * 8, "speaker_id": "Spk_1"} for _ in range(100)]
     text, source = asyncio.run(gw._generate("summarize", segs, max_words=200))
-    assert source == "llm"  # 单次,非 map-reduce
+    assert source == "llm-mapreduce"
+    assert call_count["n"] >= 3
+
+
+def test_long_english_meeting_can_still_single_call(monkeypatch):
+    """英文按更低 token 密度估算,同等字符量不必过早分块。"""
+    import app.services.llm_gateway as gw_mod
+    call_count = {"n": 0}
+
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            call_count["n"] += 1
+            return {"choices": [{"message": {"content": "summary"}}]}
+
+    class FakeClient:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json, headers=None):
+            return FakeResp()
+
+    async def fake_probe(self): return True
+    monkeypatch.setattr(LLMGateway, "_probe", fake_probe)
+    monkeypatch.setattr(gw_mod.httpx, "AsyncClient", FakeClient)
+
+    cfg = LLMConfig(enabled=True, endpoint="http://127.0.0.1:11434/v1", max_input_tokens=8000)
+    gw = LLMGateway(cfg)
+    segs = [{"text": "product roadmap alignment and delivery planning " * 3, "speaker_id": "Spk_1"} for _ in range(100)]
+    text, source = asyncio.run(gw._generate("summarize", segs, max_words=200))
+    assert source == "llm"
     assert call_count["n"] == 1
 
 
@@ -657,6 +685,51 @@ def test_long_transcript_triggers_mapreduce(monkeypatch):
     assert source == "llm-mapreduce"
     # map-reduce:块数 + 1 次合并调用。块数 >= 2(因为超长分了多块)
     assert call_count["n"] >= 3  # 至少 2 块 + 1 合并
+
+
+def test_single_call_timeout_retries_with_mapreduce(monkeypatch):
+    """单次长稿超时后自动分块重试,不直接降级到 extractive。"""
+    import app.services.llm_gateway as gw_mod
+    from app.services.llm_gateway import LLMGateway
+    from app.config import LLMConfig
+
+    calls = {"n": 0}
+
+    class FakeResp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "分块结果"}}]}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json, headers=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise gw_mod.httpx.TimeoutException("slow single request")
+            return FakeResp()
+
+    monkeypatch.setattr(gw_mod.httpx, "AsyncClient", FakeClient)
+
+    cfg = LLMConfig(enabled=True, endpoint="http://127.0.0.1:19700/auth/v1", max_input_tokens=20000)
+    gw = LLMGateway(cfg)
+    segs = [{"text": "这是一段较长中文会议内容。" * 10, "speaker_id": "Spk_1"} for _ in range(100)]
+    text, source = asyncio.run(gw._generate("summarize", segs, max_words=200))
+
+    assert text == "分块结果"
+    assert source == "llm-mapreduce"
+    assert calls["n"] >= 3
 
 
 def test_split_segments_keeps_turn_intact():

@@ -38,7 +38,7 @@ export async function getVoiceSampleAudioUrl(personId:string,sampleId:string) { 
 export const confirmSpeaker = (meetingId:string,speakerId:string,personId:string|null) => call({method:'PATCH',url:`/v1/meetings/${meetingId}/speakers/${speakerId}/person`,data:{person_id:personId}})
 export const updateSegmentText = (meetingId:string,segmentId:number,text:string) => call({method:'PATCH',url:`/v1/meetings/${meetingId}/segments/${segmentId}`,data:{text}})
 export const assignSegmentSpeaker = (meetingId:string,segmentIds:number[],speakerId:string|null) => call<{updated:number}>({method:'PATCH',url:`/v1/meetings/${meetingId}/segments/speaker`,data:{segment_ids:segmentIds,meeting_speaker_id:speakerId}})
-export const generateMeetingNote = (meetingId:string,type:'summary'|'minutes'|'actions') => call<MeetingNote>({method:'POST',url:`/v1/meetings/${meetingId}/notes/${type}`})
+export const generateMeetingNote = (meetingId:string,type:'summary'|'minutes'|'actions') => call<MeetingNote>({method:'POST',url:`/v1/meetings/${meetingId}/notes/${type}`,timeout:0})
 export const saveMeetingNote = (meetingId:string,type:string,content:string) => call<MeetingNote>({method:'PUT',url:`/v1/meetings/${meetingId}/notes/${type}`,data:{content}})
 async function audioBlobError(data: unknown, fallback: string) {
   if (data instanceof Blob) {
