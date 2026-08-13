@@ -5,7 +5,9 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
@@ -46,6 +48,13 @@ class SpeakerSettingsRequest(BaseModel):
     api_key: Optional[str] = Field(None, max_length=500)
     model: str = Field("campplus", min_length=1, max_length=128)
     device: str = Field("auto", min_length=2, max_length=16)
+
+
+class ModelSourceTestRequest(BaseModel):
+    section: str = Field(..., pattern="^(asr|speaker|diarization)$")
+    provider: str = Field("custom", min_length=1, max_length=40)
+    endpoint: Optional[str] = Field(None, max_length=500)
+    api_key: Optional[str] = Field(None, max_length=500)
 
 
 class DiarizationSettingsRequest(BaseModel):
@@ -319,6 +328,72 @@ def _validate_asr_device(device: str, device_status: dict[str, Any]) -> None:
         raise HTTPException(status_code=400, detail="当前 PyTorch 没有检测到可用 MPS 设备。")
 
 
+def _default_probe_url(provider: str, endpoint: str) -> str:
+    provider = provider.strip().lower()
+    endpoint = endpoint.strip().rstrip("/")
+    if provider == "huggingface":
+        return f"{endpoint}/api/whoami-v2"
+    if provider == "modelscope":
+        return f"{endpoint}/api/v1/models"
+    return endpoint
+
+
+async def _probe_model_source(section: str, provider: str, endpoint: str, api_key: str | None) -> dict[str, Any]:
+    provider = (provider or "custom").strip().lower()
+    endpoint = (endpoint or "").strip()
+    if provider == "local" or endpoint.startswith("file://"):
+        raw_path = endpoint.removeprefix("file://").strip() or "./models"
+        path = (Path(__file__).resolve().parents[2] / raw_path).resolve() if raw_path.startswith(".") else Path(raw_path).expanduser()
+        return {
+            "ok": path.exists(),
+            "section": section,
+            "provider": provider,
+            "endpoint": endpoint,
+            "status_code": None,
+            "message": "本地路径可用" if path.exists() else f"本地路径不存在: {path}",
+        }
+
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="Endpoint 不能为空")
+    parsed = urlparse(endpoint)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Endpoint 必须是 http:// 或 https:// 开头的完整地址")
+
+    url = _default_probe_url(provider, endpoint)
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+            response = await client.get(url, headers=headers)
+        ok = response.status_code < 500 and response.status_code not in {401, 403}
+        if response.status_code in {401, 403}:
+            message = "服务可达，但 API Key/权限未通过"
+        elif response.status_code >= 500:
+            message = f"服务返回 {response.status_code}"
+        else:
+            message = "连接成功"
+        return {
+            "ok": ok,
+            "section": section,
+            "provider": provider,
+            "endpoint": endpoint,
+            "probe_url": url,
+            "status_code": response.status_code,
+            "message": message,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "section": section,
+            "provider": provider,
+            "endpoint": endpoint,
+            "probe_url": url,
+            "status_code": None,
+            "message": f"连接失败: {exc}",
+        }
+
+
 def _asr_settings_status(*, reload_result: dict[str, Any] | None = None) -> dict[str, Any]:
     public_settings = public_model_settings()
     asr_source = public_settings.get("asr", {})
@@ -390,6 +465,16 @@ async def get_model_config():
             ],
         },
     }
+
+
+@router.post("/v1/model-source/test")
+async def test_model_source(body: ModelSourceTestRequest):
+    settings = read_model_settings(include_env_secrets=True)
+    current = settings.get(body.section, {}) if isinstance(settings.get(body.section), dict) else {}
+    provider = body.provider or current.get("provider") or "custom"
+    endpoint = body.endpoint if body.endpoint is not None else current.get("endpoint") or ""
+    api_key = (body.api_key or "").strip() or current.get("api_key") or ""
+    return await _probe_model_source(body.section, provider, endpoint, api_key)
 
 
 @router.get("/v1/asr/engines")

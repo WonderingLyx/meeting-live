@@ -163,6 +163,16 @@ export interface AsrTestResponse {
   }
 }
 
+export interface ModelSourceTestResponse {
+  ok: boolean
+  section: 'asr' | 'speaker' | 'diarization'
+  provider: string
+  endpoint: string
+  probe_url?: string
+  status_code?: number | null
+  message: string
+}
+
 export async function getEngines() {
   return call<{ current: string; engines: Record<string, EngineInfo> }>({
     url: '/v1/engines',
@@ -229,6 +239,19 @@ export async function saveSpeakerSettings(payload: {
 export async function getModelConfig() {
   return call<ModelConfigResponse>({
     url: '/v1/model-config',
+  })
+}
+
+export async function testModelSource(payload: {
+  section: 'asr' | 'speaker' | 'diarization'
+  provider?: string
+  endpoint?: string | null
+  api_key?: string | null
+}) {
+  return call<ModelSourceTestResponse>({
+    url: '/v1/model-source/test',
+    method: 'POST',
+    data: payload,
   })
 }
 

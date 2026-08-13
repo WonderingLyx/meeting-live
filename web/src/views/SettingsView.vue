@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getAsrSettings, getEngines, getModelConfig, getModels, getSpeakerSettings, saveAsrSettings, saveSpeakerSettings, switchAsrEngine, switchEngine, testAsrEngine, type AsrInfo, type AsrSettings, type AsrTestResponse, type EngineInfo, type ModelConfigResponse, type ModelSourceProvider, type ModelsInfo, type SpeakerSettings } from '../api/engines'
+import { getAsrSettings, getEngines, getModelConfig, getModels, getSpeakerSettings, saveAsrSettings, saveSpeakerSettings, switchAsrEngine, switchEngine, testAsrEngine, testModelSource, type AsrInfo, type AsrSettings, type AsrTestResponse, type EngineInfo, type ModelConfigResponse, type ModelSourceProvider, type ModelsInfo, type SpeakerSettings } from '../api/engines'
 import { getLlmSettings, getLlmStatus, saveLlmSettings, testLlmConnection, getLlmPrompts, saveLlmPrompts, listLlmModels, type LlmSettings, type LlmPrompts } from '../api/llm'
 import { getDiarizationSettings, saveDiarizationSettings, testDiarizationSettings, type DiarizationSettings, type DiarizationEngineInfo } from '../api/diarization'
 type LlmResp = Awaited<ReturnType<typeof getLlmStatus>>
@@ -45,8 +45,18 @@ const savingAsrConfig = ref(false)
 const savingAsrDevice = ref(false)
 const savingSpeaker = ref(false)
 const testingDiarization = ref(false)
+const testingAsrSource = ref(false)
+const testingSpeakerSource = ref(false)
+const testingDiarizationSource = ref(false)
 const showPrompts = ref(false)
 const showErrorPanel = ref(false)
+const showAsrConfig = ref(false)
+const showAsrModels = ref(false)
+const showAsrSampleTest = ref(false)
+const showSpeakerConfig = ref(false)
+const showSpeakerModels = ref(false)
+const showDiarizationConfig = ref(false)
+const showDiarizationModels = ref(false)
 const testingLlm = ref(false)
 const testingAsr = ref(false)
 const switchingEngine = ref<string | null>(null)
@@ -211,9 +221,9 @@ const llmProviders = [
 ]
 
 const modelSourceProviders: ModelSourceProvider[] = [
-  { key: 'modelscope', label: 'ModelScope', endpoint: 'https://modelscope.cn', token_env: 'MODELSCOPE_API_TOKEN', scope: 'asr,speaker' },
+  { key: 'modelscope', label: 'ModelScope', endpoint: 'https://modelscope.cn', token_env: 'MODELSCOPE_API_TOKEN', scope: 'asr,speaker,diarization' },
   { key: 'huggingface', label: 'Hugging Face', endpoint: 'https://huggingface.co', token_env: 'HF_TOKEN', scope: 'asr,speaker,diarization' },
-  { key: 'local', label: 'Local cache/path', endpoint: 'file://./models', token_env: '', scope: 'asr,speaker' },
+  { key: 'local', label: 'Local cache/path', endpoint: 'file://./models', token_env: '', scope: 'asr,speaker,diarization' },
   { key: 'custom', label: 'Custom', endpoint: '', token_env: '', scope: 'asr,speaker,diarization' },
 ]
 
@@ -231,6 +241,20 @@ const diarizationEngineList = computed(() => {
   const engines = diarizationEngines.value
   return [...order.filter((k) => engines[k]), ...Object.keys(engines).filter((k) => !order.includes(k))]
 })
+const currentAsrName = computed(() => asrEngines.value[currentAsr.value]?.name || currentAsr.value)
+const selectedAsrName = computed(() => {
+  const key = asrSettings.value?.model || currentAsr.value
+  return asrEngines.value[key]?.name || key
+})
+const currentSpeakerName = computed(() => currentEngine.value ? (engines.value[currentEngine.value]?.name || currentEngine.value) : '—')
+const selectedSpeakerName = computed(() => {
+  const key = speakerSettings.value?.model || currentEngine.value || ''
+  return engines.value[key]?.name || key || '—'
+})
+const selectedDiarizationInfo = computed(() => (
+  diarization.value ? diarizationEngines.value[diarization.value.engine] : undefined
+))
+const selectedDiarizationName = computed(() => selectedDiarizationInfo.value?.name || diarization.value?.engine || '—')
 
 let asrPollTimer: number | null = null
 
@@ -261,6 +285,43 @@ function onDiarizationEngineChange() {
 function diarizationEngineDescription(info?: DiarizationEngineInfo) {
   if (!info) return ''
   return isEnglish.value ? (info.description_en || info.description || '') : (info.description || info.description_en || '')
+}
+
+function sourceTestToastPrefix(section: 'asr' | 'speaker' | 'diarization') {
+  if (section === 'asr') return 'ASR'
+  if (section === 'speaker') return '声纹'
+  return '说话人分离'
+}
+
+async function testSourceConnection(section: 'asr' | 'speaker' | 'diarization') {
+  const target =
+    section === 'asr' ? asrSettings.value
+      : section === 'speaker' ? speakerSettings.value
+        : diarization.value
+  if (!target) return
+  const key =
+    section === 'asr' ? asrApiKey.value.trim()
+      : section === 'speaker' ? speakerApiKey.value.trim()
+        : hfToken.value.trim()
+  const busy =
+    section === 'asr' ? testingAsrSource
+      : section === 'speaker' ? testingSpeakerSource
+        : testingDiarizationSource
+  if (busy.value) return
+  try {
+    busy.value = true
+    const result = await testModelSource({
+      section,
+      provider: target.provider,
+      endpoint: target.endpoint,
+      api_key: key || null,
+    })
+    window.toast?.(`${sourceTestToastPrefix(section)} 连接测试: ${result.message}`, result.ok ? 'ok' : 'error')
+  } catch (e) {
+    window.toast?.(`${sourceTestToastPrefix(section)} 连接测试失败: ${e instanceof Error ? e.message : e}`, 'error')
+  } finally {
+    busy.value = false
+  }
 }
 
 function modelConfigPath() {
@@ -565,18 +626,29 @@ async function saveDiarizationConfig() {
   }
 }
 
-async function testDiarizationConfig() {
+async function pickDiarizationEngine(key: string) {
+  if (!diarization.value || savingDiarization.value || testingDiarization.value) return
+  if (key === diarization.value.engine && diarization.value.enabled) return
+  diarization.value.engine = key
+  onDiarizationEngineChange()
+  await saveDiarizationConfig()
+  await testDiarizationConfig(false)
+}
+
+async function testDiarizationConfig(confirm = true) {
   if (!diarization.value || testingDiarization.value) return
   const engineInfo = diarizationEngines.value[diarization.value.engine]
-  const ok = await dialog.showConfirm({
-    title: '加载说话人分离引擎?',
-    message: `测试会尝试加载 ${engineInfo?.name || diarization.value.engine} / ${diarization.value.model_id}。首次使用可能联网下载模型。`,
-    detail: `Token: ${diarization.value.token_configured ? '已配置' : '未配置'}\n设备: ${diarization.value.device}\n依赖: ${engineInfo?.dependency_available === false ? (engineInfo.install_hint || '不可用') : '可用或待加载'}`,
-    confirmText: '开始测试',
-    cancelText: t('btn.cancel') || '取消',
-    danger: false,
-  })
-  if (!ok) return
+  if (confirm) {
+    const ok = await dialog.showConfirm({
+      title: '加载说话人分离引擎?',
+      message: `测试会尝试加载 ${engineInfo?.name || diarization.value.engine} / ${diarization.value.model_id}。首次使用可能联网下载模型。`,
+      detail: `设备: ${diarization.value.device}`,
+      confirmText: '开始测试',
+      cancelText: t('btn.cancel') || '取消',
+      danger: false,
+    })
+    if (!ok) return
+  }
   try {
     testingDiarization.value = true
     diarization.value = await testDiarizationSettings()
@@ -747,8 +819,13 @@ onUnmounted(() => {
         <span>{{ t('settings.asr.label') || 'ASR 引擎' }}</span>
         <em>ASR</em>
       </div>
-      <div class="d">{{ t('settings.asr.desc') || '当前语音识别模型由后端 ASR_ENGINE 环境变量决定,修改后需重启服务。' }}</div>
-      <div v-if="asrSettings" class="llm-form model-source-form">
+      <div class="d">当前: {{ currentAsrName }} · 设备: {{ asrSettings?.loaded_device || asrSettings?.device || 'auto' }}</div>
+      <div class="section-toolbar">
+        <button class="btn ghost sm" type="button" @click="showAsrModels = !showAsrModels">{{ showAsrModels ? '收起模型' : '切换模型' }}</button>
+        <button class="btn ghost sm" type="button" @click="showAsrConfig = !showAsrConfig">{{ showAsrConfig ? '收起 API' : 'API 设置' }}</button>
+        <button class="btn ghost sm" type="button" @click="showAsrSampleTest = !showAsrSampleTest">{{ showAsrSampleTest ? '收起测试' : '样本测试' }}</button>
+      </div>
+      <div v-if="asrSettings && showAsrConfig" class="llm-form model-source-form compact-config">
         <label>
           <span>Provider</span>
           <select v-model="asrSettings.provider" @change="fillProviderEndpoint('asr')">
@@ -777,13 +854,13 @@ onUnmounted(() => {
           <input v-model="asrSettings.word_timestamps" type="checkbox" />
           <span>Qwen3 字级时间戳</span>
         </label>
-        <div class="llm-secret-note">
-          配置保存到 <code>{{ modelConfigPath() }}</code>；API Key 留空会保留已有值。选择未缓存模型时会自动下载，下载进度在下方显示。
-        </div>
       </div>
-      <div v-if="asrSettings" class="llm-options llm-actions model-config-actions">
+      <div v-if="asrSettings && showAsrConfig" class="llm-options llm-actions model-config-actions">
         <button class="btn primary sm" type="button" :disabled="savingAsrConfig || asrBusy" @click="saveAsrConfig">
           {{ savingAsrConfig ? '保存中…' : '保存并加载 ASR' }}
+        </button>
+        <button class="btn ghost sm" type="button" :disabled="testingAsrSource" @click="testSourceConnection('asr')">
+          {{ testingAsrSource ? '测试中…' : '测试连接' }}
         </button>
       </div>
       <div v-if="asrSettings" class="asr-device-panel">
@@ -813,7 +890,7 @@ onUnmounted(() => {
           <span v-if="asrSettings.device_status?.error">· {{ asrSettings.device_status.error }}</span>
         </div>
       </div>
-      <div class="eng-list compact">
+      <div v-if="showAsrModels" class="eng-list compact collapsed-list">
         <div
           v-for="key in asrList"
           :key="key"
@@ -869,12 +946,7 @@ onUnmounted(() => {
           当前仍使用 {{ asrEngines[currentAsr]?.name || currentAsr }}，新模型完成后会自动切换。下载期间请保持服务窗口运行。
         </div>
       </div>
-      <div class="config-hint">
-        <code>ASR_ENGINE={{ currentAsr }}</code>
-        <code v-if="pendingAsr">PENDING={{ pendingAsr }}</code>
-        <span>{{ t('settings.asr.dynamicHint') || '点击可动态切换;新模型加载完成前继续使用旧 ASR' }}</span>
-      </div>
-      <div class="asr-test-panel">
+      <div v-if="showAsrSampleTest" class="asr-test-panel">
         <div class="asr-test-head">
           <b>ASR 样本测试</b>
           <span>{{ currentAsr }}</span>
@@ -905,8 +977,12 @@ onUnmounted(() => {
         <span>{{ t('settings.engine.label') }}</span>
         <em>{{ t('view.settings.engine') }}</em>
       </div>
-      <div class="d">{{ t('settings.engine.desc') }}</div>
-      <div v-if="speakerSettings" class="llm-form model-source-form">
+      <div class="d">当前: {{ currentSpeakerName }} · 选择: {{ selectedSpeakerName }}</div>
+      <div class="section-toolbar">
+        <button class="btn ghost sm" type="button" @click="showSpeakerModels = !showSpeakerModels">{{ showSpeakerModels ? '收起模型' : '切换模型' }}</button>
+        <button class="btn ghost sm" type="button" @click="showSpeakerConfig = !showSpeakerConfig">{{ showSpeakerConfig ? '收起 API' : 'API 设置' }}</button>
+      </div>
+      <div v-if="speakerSettings && showSpeakerConfig" class="llm-form model-source-form compact-config">
         <label>
           <span>Provider</span>
           <select v-model="speakerSettings.provider" @change="fillProviderEndpoint('speaker')">
@@ -935,16 +1011,16 @@ onUnmounted(() => {
             <option value="cuda">gpu/cuda/rocm</option>
           </select>
         </label>
-        <div class="llm-secret-note">
-          声纹模型配置保存到 <code>{{ modelConfigPath() }}</code>。切换不同 embedding 维度的模型后，旧声音样本会保留但不会跨模型误匹配。
-        </div>
       </div>
-      <div v-if="speakerSettings" class="llm-options llm-actions model-config-actions">
+      <div v-if="speakerSettings && showSpeakerConfig" class="llm-options llm-actions model-config-actions">
         <button class="btn primary sm" type="button" :disabled="savingSpeaker || !!switchingEngine" @click="saveSpeakerConfig">
           {{ savingSpeaker ? '保存中…' : '保存并加载声纹' }}
         </button>
+        <button class="btn ghost sm" type="button" :disabled="testingSpeakerSource" @click="testSourceConnection('speaker')">
+          {{ testingSpeakerSource ? '测试中…' : '测试连接' }}
+        </button>
       </div>
-      <div class="eng-list">
+      <div v-if="showSpeakerModels" class="eng-list collapsed-list">
         <div
           v-for="key in engineList"
           :key="key"
@@ -984,14 +1060,44 @@ onUnmounted(() => {
         <span class="llm-title"><span>说话人分离</span><em>DIARIZATION</em></span>
         <span class="diag-badge" :class="{ on: diarization.enabled }">{{ diarization.enabled ? '可用' : '未启用' }}</span>
       </div>
-      <div class="d">上传会议的多人分段可选择 pyannote、FunASR CAM++ 或本地命令适配器。实时录音的声纹引擎仍只负责临时聚类和已登记人物匹配。</div>
-      <div class="llm-form">
+      <div class="d">当前: {{ selectedDiarizationName }} · 设备: {{ diarization.loaded_device || diarization.device }}</div>
+      <div class="section-toolbar">
+        <button class="btn ghost sm" type="button" @click="showDiarizationModels = !showDiarizationModels">{{ showDiarizationModels ? '收起模型' : '切换模型' }}</button>
+        <button class="btn ghost sm" type="button" @click="showDiarizationConfig = !showDiarizationConfig">{{ showDiarizationConfig ? '收起 API' : 'API 设置' }}</button>
+        <button class="btn ghost sm" type="button" :disabled="testingDiarization" @click="testDiarizationConfig()">
+          {{ testingDiarization ? '加载中…' : '测试加载' }}
+        </button>
+      </div>
+      <div v-if="showDiarizationModels" class="eng-list compact collapsed-list">
+        <div
+          v-for="key in diarizationEngineList"
+          :key="key"
+          class="eng-row"
+          :class="{ active: key === diarization.engine && diarization.enabled, switching: key === diarization.engine && (savingDiarization || testingDiarization), disabled: savingDiarization || testingDiarization }"
+          @click="pickDiarizationEngine(key)"
+        >
+          <div class="radio" />
+          <div class="info">
+            <div class="n">{{ diarizationEngines[key]?.name || key }}</div>
+            <div class="m">
+              <b>{{ diarizationEngines[key]?.languages || '—' }}</b>
+              <span class="sep">·</span>
+              {{ diarizationEngines[key]?.provider || 'local' }}
+              <span v-if="diarizationEngines[key]?.dependency_available === false" class="sep">·</span>
+              <span v-if="diarizationEngines[key]?.dependency_available === false">{{ diarizationEngines[key]?.install_hint || '依赖不可用' }}</span>
+            </div>
+            <div class="m muted">{{ diarizationEngineDescription(diarizationEngines[key]) }}</div>
+            <div class="m model-source">Model: {{ diarizationEngines[key]?.model || key }}</div>
+          </div>
+          <span v-if="key === diarization.engine && diarization.enabled" class="pill">当前</span>
+          <span v-else-if="key === diarization.engine && (savingDiarization || testingDiarization)" class="pill">加载中</span>
+        </div>
+      </div>
+      <div v-if="showDiarizationConfig" class="llm-form compact-config">
         <label>
           <span>Engine</span>
           <select v-model="diarization.engine" @change="onDiarizationEngineChange">
-            <option v-for="key in diarizationEngineList" :key="key" :value="key">
-              {{ diarizationEngines[key]?.name || key }}
-            </option>
+            <option v-for="key in diarizationEngineList" :key="key" :value="key">{{ diarizationEngines[key]?.name || key }}</option>
           </select>
         </label>
         <label>
@@ -1024,37 +1130,19 @@ onUnmounted(() => {
           <span>Local Command</span>
           <input v-model.trim="diarization.command" type="text" autocomplete="off" placeholder="python scripts/diarize.py --input &quot;{input}&quot; --output &quot;{output}&quot;" />
         </label>
-        <div class="llm-secret-note">
-          配置保存到 <code>{{ modelConfigPath() }}</code>。pyannote 需要 HF_TOKEN；FunASR CAM++ 会复用 ModelScope 本地缓存；本地命令需输出 JSON 或 RTTM。
-        </div>
       </div>
-      <div class="diag-links">
-        <a :href="diarization.terms_url" target="_blank" rel="noopener">接受模型条款</a>
-        <a :href="diarization.token_url" target="_blank" rel="noopener">创建 HF token</a>
-        <code>{{ diarization.env_path }}</code>
-      </div>
-      <div class="llm-options llm-actions">
+      <div v-if="showDiarizationConfig" class="llm-options llm-actions">
         <button class="btn primary sm" type="button" :disabled="savingDiarization" @click="saveDiarizationConfig">
-          {{ savingDiarization ? '保存中…' : '保存配置' }}
+          {{ savingDiarization ? '保存中…' : '保存并加载' }}
         </button>
-        <button class="btn ghost sm" type="button" :disabled="testingDiarization" @click="testDiarizationConfig">
-          {{ testingDiarization ? '加载中…' : '测试加载引擎' }}
+        <button class="btn ghost sm" type="button" :disabled="testingDiarizationSource" @click="testSourceConnection('diarization')">
+          {{ testingDiarizationSource ? '测试中…' : '测试连接' }}
         </button>
       </div>
       <div class="llm-status diag-status">
-        <span>Token:</span>
-        <b :class="diarization.token_configured ? 'on' : 'off'">{{ diarization.token_configured ? '已配置' : '未配置' }}</b>
-        <span v-if="diarization.token_preview" class="model">· {{ diarization.token_preview }}</span>
         <span class="model">· engine={{ diarization.engine }}</span>
-        <span class="model">· {{ diarization.config_source || 'model-settings' }}</span>
         <span class="model">· model={{ diarization.model_id }}</span>
         <span class="model">· device={{ diarization.device }} / loaded={{ diarization.loaded_device }}</span>
-      </div>
-      <div v-if="diarizationEngines[diarization.engine]" class="llm-secret-note">
-        {{ diarizationEngineDescription(diarizationEngines[diarization.engine]) }}
-        <span v-if="diarizationEngines[diarization.engine]?.dependency_available === false">
-          依赖不可用：{{ diarizationEngines[diarization.engine]?.install_hint }}
-        </span>
       </div>
       <div v-if="diarization.last_error" class="llm-error">{{ diarization.last_error }}</div>
       <div v-if="isGatedRepoError(diarization.last_error)" class="llm-secret-note danger">
@@ -1312,6 +1400,23 @@ onUnmounted(() => {
 }
 
 .swatch { width: 4px; height: 28px; border-radius: 2px; }
+.section-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.collapsed-list {
+  margin-top: 8px;
+}
+.compact-config {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: rgba(255,255,255,.02);
+}
 .toggle-group { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .toggle-group button {
   display: flex;
