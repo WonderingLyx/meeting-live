@@ -15,6 +15,8 @@ param(
     [string]$Aria2LowestSpeedLimit = "20K",
     [ValidateSet("cu126", "cu128", "cu130")]
     [string]$CudaWheel = "cu128",
+    [ValidateSet("auto", "latest", "stable")]
+    [string]$TorchBuild = "auto",
     [string[]]$TorchIndexUrls = @(),
     [switch]$InstallAria2,
     [switch]$PrintRocmUrls,
@@ -359,7 +361,34 @@ function Get-TorchIndexUrls {
     return @($urls)
 }
 
-function Test-CudaTorchReady($Python) {
+function Get-CudaTorchBuildDefinition($Name) {
+    if ($Name -eq "latest") {
+        return [ordered]@{ Name = "latest"; Torch = "2.11.0"; TorchAudio = "2.11.0"; TorchVision = "0.26.0" }
+    }
+    if ($CudaWheel -eq "cu130") {
+        return [ordered]@{ Name = "stable"; Torch = "2.9.0"; TorchAudio = "2.9.0"; TorchVision = "0.24.0" }
+    }
+    return [ordered]@{ Name = "stable"; Torch = "2.8.0"; TorchAudio = "2.8.0"; TorchVision = "0.23.0" }
+}
+
+function Get-CudaTorchBuildCandidates {
+    if ($TorchBuild -eq "auto") {
+        return @((Get-CudaTorchBuildDefinition "latest"), (Get-CudaTorchBuildDefinition "stable"))
+    }
+    return @((Get-CudaTorchBuildDefinition $TorchBuild))
+}
+
+function Test-CudaTorchVersionText($Version, $Build) {
+    if ($Version -notmatch "\+$CudaWheel") {
+        return $false
+    }
+    if ($Build) {
+        return $Version.StartsWith("$($Build.Torch)+", [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    return $true
+}
+
+function Test-CudaTorchReady($Python, $Build = $null) {
     try {
         $code = "import torch; print(torch.__version__); print(torch.version.cuda or ''); print(torch.cuda.is_available())"
         $lines = @(& $Python -c $code 2>$null)
@@ -369,13 +398,13 @@ function Test-CudaTorchReady($Python) {
         $version = [string]$lines[0]
         $cuda = [string]$lines[1]
         $available = [string]$lines[2]
-        return ($version -match "\+$CudaWheel" -and $cuda -and $available.Trim().ToLowerInvariant() -eq "true")
+        return ((Test-CudaTorchVersionText $version $Build) -and $cuda -and $available.Trim().ToLowerInvariant() -eq "true")
     } catch {
         return $false
     }
 }
 
-function Test-CudaTorchInstalled($Python) {
+function Test-CudaTorchInstalled($Python, $Build = $null) {
     try {
         $code = "import torch; print(torch.__version__); print(torch.version.cuda or '')"
         $lines = @(& $Python -c $code 2>$null)
@@ -384,41 +413,63 @@ function Test-CudaTorchInstalled($Python) {
         }
         $version = [string]$lines[0]
         $cuda = [string]$lines[1]
-        return ($version -match "\+$CudaWheel" -and $cuda)
+        return ((Test-CudaTorchVersionText $version $Build) -and $cuda)
     } catch {
         return $false
     }
 }
 
+function Write-CudaTorchProbeDetails($Python) {
+    try {
+        $code = "import torch; print('torch=', torch.__version__); print('cuda_runtime=', torch.version.cuda); print('gpu_available=', torch.cuda.is_available()); print('device=', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"
+        $lines = @(& $Python -c $code 2>&1)
+        foreach ($line in $lines) {
+            Write-Warn "[TORCH] $line"
+        }
+    } catch {
+        Write-Warn "[TORCH] $($_.Exception.Message)"
+    }
+}
+
 function Install-CudaTorch($Python) {
+    $requestedBuild = if ($TorchBuild -eq "auto") { $null } else { Get-CudaTorchBuildDefinition $TorchBuild }
     if (-not $ForceTorch) {
-        if ($SkipGpuCheck -and (Test-CudaTorchInstalled $Python)) {
+        if ($SkipGpuCheck -and (Test-CudaTorchInstalled $Python $requestedBuild)) {
             Write-Ok "NVIDIA CUDA PyTorch already installed; skipping."
             return
         }
-        if ((-not $SkipGpuCheck) -and (Test-CudaTorchReady $Python)) {
+        if ((-not $SkipGpuCheck) -and (Test-CudaTorchReady $Python $requestedBuild)) {
             Write-Ok "NVIDIA CUDA PyTorch already installed and GPU is available; skipping."
             return
         }
     }
     $lastError = ""
-    foreach ($indexUrl in (Get-TorchIndexUrls)) {
-        try {
-            Write-Host "PyTorch CUDA index: $indexUrl"
-            Invoke-External $Python @(
-                "-m", "pip", "install",
-                "torch==2.11.0",
-                "torchaudio==2.11.0",
-                "torchvision==0.26.0",
-                "--index-url", $indexUrl,
-                "--retries", "5",
-                "--timeout", "120",
-                "--prefer-binary"
-            ) "Failed to install NVIDIA CUDA PyTorch"
-            return
-        } catch {
-            $lastError = $_.Exception.Message
-            Write-Warn "PyTorch CUDA install via $indexUrl failed: $lastError"
+    foreach ($build in (Get-CudaTorchBuildCandidates)) {
+        foreach ($indexUrl in (Get-TorchIndexUrls)) {
+            try {
+                Write-Host "PyTorch CUDA build: $($build.Name) (torch=$($build.Torch), torchaudio=$($build.TorchAudio), torchvision=$($build.TorchVision))"
+                Write-Host "PyTorch CUDA index: $indexUrl"
+                Invoke-External $Python @(
+                    "-m", "pip", "install",
+                    "torch==$($build.Torch)",
+                    "torchaudio==$($build.TorchAudio)",
+                    "torchvision==$($build.TorchVision)",
+                    "--index-url", $indexUrl,
+                    "--retries", "5",
+                    "--timeout", "120",
+                    "--prefer-binary"
+                ) "Failed to install NVIDIA CUDA PyTorch"
+                $ready = if ($SkipGpuCheck) { Test-CudaTorchInstalled $Python $build } else { Test-CudaTorchReady $Python $build }
+                if ($ready) {
+                    Write-Ok "NVIDIA CUDA PyTorch build '$($build.Name)' is usable."
+                    return
+                }
+                Write-CudaTorchProbeDetails $Python
+                throw "PyTorch CUDA build '$($build.Name)' installed but torch import/GPU verification failed. This usually means a Windows DLL, driver, or runtime compatibility issue."
+            } catch {
+                $lastError = $_.Exception.Message
+                Write-Warn "PyTorch CUDA build $($build.Name) via $indexUrl failed: $lastError"
+            }
         }
     }
     throw "Failed to install NVIDIA CUDA PyTorch with all indexes. Last error: $lastError"

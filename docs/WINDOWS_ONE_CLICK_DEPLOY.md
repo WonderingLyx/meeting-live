@@ -133,6 +133,12 @@ NVIDIA Windows 路线推荐直接运行：
 .\install-windows-nvidia-gpu.cmd -CudaWheel cu130
 ```
 
+如果遇到 `WinError 1114`、`c10.dll` 或 `torch import` 阶段失败，直接用稳定 PyTorch 组合重装：
+
+```powershell
+.\install-windows-nvidia-gpu.cmd -ForceTorch -TorchBuild stable
+```
+
 如果 Python 3.12 没在 PATH：
 
 ```powershell

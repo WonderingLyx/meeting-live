@@ -113,6 +113,14 @@ https://download.pytorch.org/whl/<cu版本>
 
 默认 `MirrorMode=China` 会固定使用项目内置国内源优先顺序，不读取系统里残留的 `PIP_INDEX_URL`、`NPM_CONFIG_REGISTRY`、`HF_ENDPOINT`、`TORCH_INDEX_URLS`。如果确实要用环境变量，传 `-MirrorMode Auto`。
 
+PyTorch 组合默认是 `-TorchBuild auto`：
+
+| 参数 | torch | torchaudio | torchvision | 用途 |
+| --- | --- | --- | --- | --- |
+| `auto` | 先试 `latest`，失败后自动试 `stable` | 同左 | 同左 | 默认，适合一键安装 |
+| `latest` | `2.11.0` | `2.11.0` | `0.26.0` | 新驱动、新显卡优先 |
+| `stable` | `cu126/cu128`: `2.8.0`；`cu130`: `2.9.0` | 同 torch | `cu126/cu128`: `0.23.0`；`cu130`: `0.24.0` | 规避 Windows `c10.dll` / DLL 初始化失败 |
+
 ### 一键安装
 
 默认安装：
@@ -139,6 +147,13 @@ https://download.pytorch.org/whl/<cu版本>
 .\install-windows-nvidia-gpu.cmd -CudaWheel cu126
 .\install-windows-nvidia-gpu.cmd -CudaWheel cu128
 .\install-windows-nvidia-gpu.cmd -CudaWheel cu130
+```
+
+指定 PyTorch 组合：
+
+```powershell
+.\install-windows-nvidia-gpu.cmd -TorchBuild latest
+.\install-windows-nvidia-gpu.cmd -TorchBuild stable
 ```
 
 使用自建 PyTorch wheel 镜像：
@@ -446,6 +461,26 @@ nvidia-smi
 - `nvidia-smi` 不存在或报错：重装 NVIDIA 驱动。
 - `torch` 没有 `+cu...`：当前环境被 CPU 版 PyTorch 覆盖，运行 `.\install-windows-nvidia-gpu.cmd -ForceTorch`。
 - 驱动太旧：升级驱动，或从 `cu128/cu130` 降到 `cu126`。
+
+### NVIDIA: `WinError 1114` / `c10.dll` 加载失败
+
+这是 PyTorch 在 `import torch` 阶段加载 Windows DLL 失败，不是项目业务代码报错。先用稳定 PyTorch 组合重装：
+
+```powershell
+.\install-windows-nvidia-gpu.cmd -ForceTorch -TorchBuild stable
+```
+
+如果还失败，安装或更新 Microsoft Visual C++ Redistributable：
+
+```powershell
+winget install -e --id Microsoft.VCRedist.2015+.x64
+```
+
+然后重跑：
+
+```powershell
+.\install-windows-nvidia-gpu.cmd -ForceTorch -TorchBuild stable
+```
 
 ### AMD: ROCm 下载慢或反复下载
 
