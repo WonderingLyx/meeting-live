@@ -2,6 +2,8 @@
 
 本文面向新 Windows 机器部署。默认路线是 CPU + 中文 FunASR/ModelScope 模型，优先保证可安装、可启动、可切换模型；AMD ROCm GPU 和 NVIDIA CUDA GPU 路线作为可选 profile。
 
+GPU 机器的兼容型号、驱动版本、完整 NVIDIA/AMD 命令和排错步骤见 [Windows GPU 部署指南](WINDOWS_GPU_DEPLOY.md)。
+
 ## 前置条件
 
 必须安装：

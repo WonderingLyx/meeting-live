@@ -9,7 +9,7 @@
 [![Node](https://img.shields.io/badge/node-20%2B-green.svg)](https://nodejs.org/)
 ![Release](https://img.shields.io/badge/release-v0.2.0--beta-orange.svg)
 
-[English](README.en.md) · [Windows 一键部署](docs/WINDOWS_ONE_CLICK_DEPLOY.md) · [使用说明](docs/USAGE.md) · [LLM 配置](docs/LLM_SETUP.md) · [隐私](docs/PRIVACY.md) · [安全](docs/SECURITY.md) · [API](docs/API.md) · [模型](docs/MODELS.md)
+[English](README.en.md) · [Windows 一键部署](docs/WINDOWS_ONE_CLICK_DEPLOY.md) · [GPU 部署](docs/WINDOWS_GPU_DEPLOY.md) · [使用说明](docs/USAGE.md) · [LLM 配置](docs/LLM_SETUP.md) · [隐私](docs/PRIVACY.md) · [安全](docs/SECURITY.md) · [API](docs/API.md) · [模型](docs/MODELS.md)
 
 </div>
 
