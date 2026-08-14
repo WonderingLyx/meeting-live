@@ -18,6 +18,7 @@ param(
     [ValidateSet("auto", "latest", "stable")]
     [string]$TorchBuild = "auto",
     [string[]]$TorchIndexUrls = @(),
+    [string[]]$TorchFindLinks = @(),
     [switch]$InstallAria2,
     [switch]$PrintRocmUrls,
     [switch]$SkipGpuCheck,
@@ -44,7 +45,7 @@ $OfficialPipIndexUrl = "https://pypi.org/simple"
 $ChinaNpmRegistries = @("https://registry.npmmirror.com/")
 $OfficialNpmRegistry = "https://registry.npmjs.org/"
 $ChinaHfEndpoint = "https://hf-mirror.com"
-$ChinaTorchIndexBaseUrls = @("https://mirror.sjtu.edu.cn/pytorch-wheels")
+$ChinaTorchFindLinkBaseUrls = @("https://mirrors.aliyun.com/pytorch-wheels")
 $OfficialTorchIndexBaseUrl = "https://download.pytorch.org/whl"
 
 function Write-Step($Message) {
@@ -168,6 +169,10 @@ function Resolve-InstallerMirrors {
     Write-Host "pip indexes: $($script:ResolvedPipIndexUrls -join ', ')"
     Write-Host "npm registries: $($script:ResolvedNpmRegistries -join ', ')"
     if ($Profile -eq "NvidiaCuda") {
+        $findLinks = Get-TorchFindLinks
+        if ($findLinks.Count -gt 0) {
+            Write-Host "PyTorch CUDA find-links: $($findLinks -join ', ')"
+        }
         Write-Host "PyTorch CUDA indexes: $((Get-TorchIndexUrls) -join ', ')"
     }
     if ($script:ResolvedHfEndpoint) {
@@ -350,15 +355,45 @@ function Get-TorchIndexUrls {
             Add-ListValues $urls $env:TORCH_INDEX_URLS
             Add-UniqueValue $urls "$OfficialTorchIndexBaseUrl/$CudaWheel"
         } else {
-            foreach ($baseUrl in $ChinaTorchIndexBaseUrls) {
-                Add-UniqueValue $urls "$($baseUrl.TrimEnd('/'))/$CudaWheel"
-            }
             Add-UniqueValue $urls "$OfficialTorchIndexBaseUrl/$CudaWheel"
         }
     } elseif ($MirrorMode -ne "Official") {
         Add-UniqueValue $urls "$OfficialTorchIndexBaseUrl/$CudaWheel"
     }
     return @($urls)
+}
+
+function Get-TorchFindLinks {
+    $urls = New-Object System.Collections.ArrayList
+    Add-ListValues $urls $TorchFindLinks
+    if ($urls.Count -eq 0) {
+        if ($MirrorMode -eq "Auto" -and $env:TORCH_FIND_LINKS) {
+            Add-ListValues $urls $env:TORCH_FIND_LINKS
+        } elseif ($MirrorMode -ne "Official") {
+            foreach ($baseUrl in $ChinaTorchFindLinkBaseUrls) {
+                Add-UniqueValue $urls "$($baseUrl.TrimEnd('/'))/$CudaWheel"
+            }
+        }
+    }
+    return @($urls)
+}
+
+function Get-PrimaryPipIndexUrl {
+    if ($script:ResolvedPipIndexUrls -and $script:ResolvedPipIndexUrls.Count -gt 0) {
+        return [string]$script:ResolvedPipIndexUrls[0]
+    }
+    return $OfficialPipIndexUrl
+}
+
+function Get-ExtraPipIndexArgs {
+    $args = @()
+    if (-not $script:ResolvedPipIndexUrls) {
+        return $args
+    }
+    for ($i = 1; $i -lt $script:ResolvedPipIndexUrls.Count; $i++) {
+        $args += @("--extra-index-url", [string]$script:ResolvedPipIndexUrls[$i])
+    }
+    return $args
 }
 
 function Get-CudaTorchBuildDefinition($Name) {
@@ -445,6 +480,37 @@ function Install-CudaTorch($Python) {
     }
     $lastError = ""
     foreach ($build in (Get-CudaTorchBuildCandidates)) {
+        foreach ($findLink in (Get-TorchFindLinks)) {
+            try {
+                $pipIndexUrl = Get-PrimaryPipIndexUrl
+                Write-Host "PyTorch CUDA build: $($build.Name) (torch=$($build.Torch), torchaudio=$($build.TorchAudio), torchvision=$($build.TorchVision))"
+                Write-Host "PyTorch CUDA find-links: $findLink"
+                Write-Host "PyTorch dependency index: $pipIndexUrl"
+                $args = @(
+                    "-m", "pip", "install",
+                    "torch==$($build.Torch)",
+                    "torchaudio==$($build.TorchAudio)",
+                    "torchvision==$($build.TorchVision)",
+                    "--index-url", $pipIndexUrl
+                ) + (Get-ExtraPipIndexArgs) + @(
+                    "--find-links", $findLink,
+                    "--retries", "5",
+                    "--timeout", "120",
+                    "--prefer-binary"
+                )
+                Invoke-External $Python $args "Failed to install NVIDIA CUDA PyTorch"
+                $ready = if ($SkipGpuCheck) { Test-CudaTorchInstalled $Python $build } else { Test-CudaTorchReady $Python $build }
+                if ($ready) {
+                    Write-Ok "NVIDIA CUDA PyTorch build '$($build.Name)' is usable."
+                    return
+                }
+                Write-CudaTorchProbeDetails $Python
+                throw "PyTorch CUDA build '$($build.Name)' installed but torch import/GPU verification failed. This usually means a Windows DLL, driver, or runtime compatibility issue."
+            } catch {
+                $lastError = $_.Exception.Message
+                Write-Warn "PyTorch CUDA build $($build.Name) via find-links $findLink failed: $lastError"
+            }
+        }
         foreach ($indexUrl in (Get-TorchIndexUrls)) {
             try {
                 Write-Host "PyTorch CUDA build: $($build.Name) (torch=$($build.Torch), torchaudio=$($build.TorchAudio), torchvision=$($build.TorchVision))"

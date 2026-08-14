@@ -40,7 +40,7 @@
 | 前端 npm 依赖 | `https://registry.npmmirror.com/` | `https://registry.npmjs.org/` |
 | Hugging Face 模型 | `https://hf-mirror.com` | `MirrorMode=Official` 时不设置 |
 | ModelScope 模型 | `https://modelscope.cn` | 无需额外设置 |
-| NVIDIA PyTorch CUDA wheel | 上交 `https://mirror.sjtu.edu.cn/pytorch-wheels/<cu版本>` | `https://download.pytorch.org/whl/<cu版本>` |
+| NVIDIA PyTorch CUDA wheel | 阿里 `https://mirrors.aliyun.com/pytorch-wheels/<cu版本>`，依赖解析走清华 PyPI | `https://download.pytorch.org/whl/<cu版本>` |
 | AMD ROCm Windows wheel | 暂无已验证公开国内源 | `https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1` |
 
 ## 获取代码或 zip
@@ -97,10 +97,10 @@ dist-packages\matrix-live-diarizer-windows-amd-api.zip
 | `cu128` | `https://download.pytorch.org/whl/cu128` | Windows 驱动建议 572.61+，这是默认选项 |
 | `cu130` | `https://download.pytorch.org/whl/cu130` | 建议 580+ 驱动，只在新驱动和新显卡上优先测试 |
 
-默认用 `cu128`，因为它在兼容性和新模型性能之间比较均衡。脚本在 `MirrorMode=China` 时会优先使用上交 PyTorch wheel 镜像：
+默认用 `cu128`，因为它在兼容性和新模型性能之间比较均衡。脚本在 `MirrorMode=China` 时会优先使用阿里 PyTorch wheel 文件镜像，普通依赖解析继续走清华 PyPI：
 
 ```text
-https://mirror.sjtu.edu.cn/pytorch-wheels/<cu版本>
+https://mirrors.aliyun.com/pytorch-wheels/<cu版本>
 ```
 
 如果镜像失败，再回退到 PyTorch 官方源：
@@ -109,9 +109,9 @@ https://mirror.sjtu.edu.cn/pytorch-wheels/<cu版本>
 https://download.pytorch.org/whl/<cu版本>
 ```
 
-实测阿里、清华对应 PyTorch CUDA wheel 路径对本项目当前 `torch==2.11.0` 解析不到包，因此没有设为默认源。
+清华 PyPI 能提供普通 Python 包，但没有可直接作为 `+cu128`/`+cu130` CUDA wheel 专用索引使用的 `pytorch-wheels/<cu版本>` 目录，因此 NVIDIA CUDA wheel 不直接用清华目录。
 
-默认 `MirrorMode=China` 会固定使用项目内置国内源优先顺序，不读取系统里残留的 `PIP_INDEX_URL`、`NPM_CONFIG_REGISTRY`、`HF_ENDPOINT`、`TORCH_INDEX_URLS`。如果确实要用环境变量，传 `-MirrorMode Auto`。
+默认 `MirrorMode=China` 会固定使用项目内置国内源优先顺序，不读取系统里残留的 `PIP_INDEX_URL`、`NPM_CONFIG_REGISTRY`、`HF_ENDPOINT`、`TORCH_FIND_LINKS`、`TORCH_INDEX_URLS`。如果确实要用环境变量，传 `-MirrorMode Auto`。
 
 PyTorch 组合默认是 `-TorchBuild auto`：
 
@@ -156,10 +156,16 @@ PyTorch 组合默认是 `-TorchBuild auto`：
 .\install-windows-nvidia-gpu.cmd -TorchBuild stable
 ```
 
-使用自建 PyTorch wheel 镜像：
+使用自建 PyTorch wheel 文件列表镜像：
 
 ```powershell
-.\install-windows-nvidia-gpu.cmd -TorchIndexUrls "http://192.168.1.10/pytorch-wheels/cu128"
+.\install-windows-nvidia-gpu.cmd -TorchFindLinks "http://192.168.1.10/pytorch-wheels/cu128"
+```
+
+使用 pip simple 格式的自建 PyTorch 索引：
+
+```powershell
+.\install-windows-nvidia-gpu.cmd -TorchIndexUrls "http://192.168.1.10/simple/cu128"
 ```
 
 只使用官方源：

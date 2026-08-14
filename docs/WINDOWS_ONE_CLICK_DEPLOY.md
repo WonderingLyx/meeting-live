@@ -145,10 +145,10 @@ NVIDIA Windows 路线推荐直接运行：
 .\install-windows-nvidia-gpu.cmd -PythonExe "C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe"
 ```
 
-PyTorch CUDA wheel 在 `MirrorMode=China` 时默认优先使用上交源 `https://mirror.sjtu.edu.cn/pytorch-wheels/<cu版本>`，失败后回退官方源 `https://download.pytorch.org/whl/<cu版本>`。公司内网或自建镜像可以这样传入：
+PyTorch CUDA wheel 在 `MirrorMode=China` 时默认优先使用阿里文件镜像 `https://mirrors.aliyun.com/pytorch-wheels/<cu版本>`，普通依赖解析走清华 PyPI，失败后回退官方源 `https://download.pytorch.org/whl/<cu版本>`。公司内网或自建文件镜像可以这样传入：
 
 ```powershell
-.\install-windows-nvidia-gpu.cmd -TorchIndexUrls "http://192.168.1.10/pytorch-wheels/cu128"
+.\install-windows-nvidia-gpu.cmd -TorchFindLinks "http://192.168.1.10/pytorch-wheels/cu128"
 ```
 
 如果只是准备离线包、当前机器没有 NVIDIA 显卡，可以跳过显卡探测：
@@ -228,6 +228,6 @@ PyTorch CUDA wheel 在 `MirrorMode=China` 时默认优先使用上交源 `https:
 ## 排错
 
 - 仍然加载 pyannote：检查 `config/model-settings.json` 的 `diarization.engine` 是否是 `funasr_campplus`，改完后重启服务。
-- pip 下载慢：默认已使用清华/阿里 PyPI 镜像，可重跑安装脚本。
+- pip 下载慢：默认普通依赖使用清华/阿里 PyPI，NVIDIA CUDA wheel 使用阿里 PyTorch wheel 镜像，可重跑安装脚本。
 - ChromaDB 编译失败：普通 Windows 部署保持 `SPEAKER_VECTOR_STORE=memory`，不需要安装 Visual Studio Build Tools。
 - 前端打不开：确认 `web/dist/index.html` 存在；不存在时运行 `.\install-windows.cmd -ForceFrontendBuild`。
