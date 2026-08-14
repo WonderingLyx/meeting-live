@@ -30,6 +30,19 @@
 | 磁盘 | 预留 20 GB+，首次下载模型和 wheel 会占用空间 |
 | 网络 | 首次安装需要访问 PyPI、npm、ModelScope、PyTorch 或 AMD 官方源 |
 
+## 默认依赖源
+
+`MirrorMode=China` 是默认模式，安装器会按下面顺序使用国内源，失败后只在必要时回退官方源：
+
+| 依赖类型 | 默认国内源 | 兜底 |
+| --- | --- | --- |
+| Python 普通依赖 | 清华 PyPI `https://pypi.tuna.tsinghua.edu.cn/simple`，阿里 PyPI `https://mirrors.aliyun.com/pypi/simple` | `https://pypi.org/simple` |
+| 前端 npm 依赖 | `https://registry.npmmirror.com/` | `https://registry.npmjs.org/` |
+| Hugging Face 模型 | `https://hf-mirror.com` | `MirrorMode=Official` 时不设置 |
+| ModelScope 模型 | `https://modelscope.cn` | 无需额外设置 |
+| NVIDIA PyTorch CUDA wheel | 上交 `https://mirror.sjtu.edu.cn/pytorch-wheels/<cu版本>` | `https://download.pytorch.org/whl/<cu版本>` |
+| AMD ROCm Windows wheel | 暂无已验证公开国内源 | `https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1` |
+
 ## 获取代码或 zip
 
 从仓库拉分支：
@@ -84,7 +97,21 @@ dist-packages\matrix-live-diarizer-windows-amd-api.zip
 | `cu128` | `https://download.pytorch.org/whl/cu128` | Windows 驱动建议 572.61+，这是默认选项 |
 | `cu130` | `https://download.pytorch.org/whl/cu130` | 建议 580+ 驱动，只在新驱动和新显卡上优先测试 |
 
-默认用 `cu128`，因为它在兼容性和新模型性能之间比较均衡。
+默认用 `cu128`，因为它在兼容性和新模型性能之间比较均衡。脚本在 `MirrorMode=China` 时会优先使用上交 PyTorch wheel 镜像：
+
+```text
+https://mirror.sjtu.edu.cn/pytorch-wheels/<cu版本>
+```
+
+如果镜像失败，再回退到 PyTorch 官方源：
+
+```text
+https://download.pytorch.org/whl/<cu版本>
+```
+
+实测阿里、清华对应 PyTorch CUDA wheel 路径对本项目当前 `torch==2.11.0` 解析不到包，因此没有设为默认源。
+
+默认 `MirrorMode=China` 会固定使用项目内置国内源优先顺序，不读取系统里残留的 `PIP_INDEX_URL`、`NPM_CONFIG_REGISTRY`、`HF_ENDPOINT`、`TORCH_INDEX_URLS`。如果确实要用环境变量，传 `-MirrorMode Auto`。
 
 ### 一键安装
 
@@ -118,6 +145,12 @@ dist-packages\matrix-live-diarizer-windows-amd-api.zip
 
 ```powershell
 .\install-windows-nvidia-gpu.cmd -TorchIndexUrls "http://192.168.1.10/pytorch-wheels/cu128"
+```
+
+只使用官方源：
+
+```powershell
+.\install-windows-nvidia-gpu.cmd -MirrorMode Official
 ```
 
 当前机器没有 NVIDIA GPU、只是准备离线包时可跳过显卡探测：

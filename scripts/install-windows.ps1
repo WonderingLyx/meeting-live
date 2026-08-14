@@ -42,6 +42,8 @@ $OfficialPipIndexUrl = "https://pypi.org/simple"
 $ChinaNpmRegistries = @("https://registry.npmmirror.com/")
 $OfficialNpmRegistry = "https://registry.npmjs.org/"
 $ChinaHfEndpoint = "https://hf-mirror.com"
+$ChinaTorchIndexBaseUrls = @("https://mirror.sjtu.edu.cn/pytorch-wheels")
+$OfficialTorchIndexBaseUrl = "https://download.pytorch.org/whl"
 
 function Write-Step($Message) {
     Write-Host ""
@@ -123,7 +125,7 @@ function Resolve-InstallerMirrors {
 
     Add-ListValues $script:ResolvedPipIndexUrls $PipIndexUrls
     if ($script:ResolvedPipIndexUrls.Count -eq 0) {
-        if ($env:PIP_INDEX_URL) {
+        if ($MirrorMode -eq "Auto" -and $env:PIP_INDEX_URL) {
             Add-ListValues $script:ResolvedPipIndexUrls $env:PIP_INDEX_URL
         } elseif ($MirrorMode -eq "Official") {
             Add-UniqueValue $script:ResolvedPipIndexUrls $OfficialPipIndexUrl
@@ -137,7 +139,7 @@ function Resolve-InstallerMirrors {
 
     Add-ListValues $script:ResolvedNpmRegistries $NpmRegistries
     if ($script:ResolvedNpmRegistries.Count -eq 0) {
-        if ($env:NPM_CONFIG_REGISTRY) {
+        if ($MirrorMode -eq "Auto" -and $env:NPM_CONFIG_REGISTRY) {
             Add-ListValues $script:ResolvedNpmRegistries $env:NPM_CONFIG_REGISTRY
         } elseif ($MirrorMode -eq "Official") {
             Add-UniqueValue $script:ResolvedNpmRegistries $OfficialNpmRegistry
@@ -151,7 +153,7 @@ function Resolve-InstallerMirrors {
 
     if ($HfEndpoint) {
         $script:ResolvedHfEndpoint = $HfEndpoint.Trim().TrimEnd("/")
-    } elseif ($env:HF_ENDPOINT) {
+    } elseif ($MirrorMode -eq "Auto" -and $env:HF_ENDPOINT) {
         $script:ResolvedHfEndpoint = $env:HF_ENDPOINT.Trim().TrimEnd("/")
     } elseif ($MirrorMode -eq "Official") {
         $script:ResolvedHfEndpoint = ""
@@ -339,11 +341,20 @@ function Invoke-PipInstallWithMirrors($Python, [string[]]$InstallArgs, $Descript
 function Get-TorchIndexUrls {
     $urls = New-Object System.Collections.ArrayList
     Add-ListValues $urls $TorchIndexUrls
-    Add-ListValues $urls $env:TORCH_INDEX_URLS
     if ($urls.Count -eq 0) {
-        Add-UniqueValue $urls "https://download.pytorch.org/whl/$CudaWheel"
+        if ($MirrorMode -eq "Official") {
+            Add-UniqueValue $urls "$OfficialTorchIndexBaseUrl/$CudaWheel"
+        } elseif ($MirrorMode -eq "Auto" -and $env:TORCH_INDEX_URLS) {
+            Add-ListValues $urls $env:TORCH_INDEX_URLS
+            Add-UniqueValue $urls "$OfficialTorchIndexBaseUrl/$CudaWheel"
+        } else {
+            foreach ($baseUrl in $ChinaTorchIndexBaseUrls) {
+                Add-UniqueValue $urls "$($baseUrl.TrimEnd('/'))/$CudaWheel"
+            }
+            Add-UniqueValue $urls "$OfficialTorchIndexBaseUrl/$CudaWheel"
+        }
     } elseif ($MirrorMode -ne "Official") {
-        Add-UniqueValue $urls "https://download.pytorch.org/whl/$CudaWheel"
+        Add-UniqueValue $urls "$OfficialTorchIndexBaseUrl/$CudaWheel"
     }
     return @($urls)
 }

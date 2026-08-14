@@ -139,7 +139,7 @@ NVIDIA Windows 路线推荐直接运行：
 .\install-windows-nvidia-gpu.cmd -PythonExe "C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe"
 ```
 
-PyTorch CUDA wheel 默认来自 `https://download.pytorch.org/whl/<cu版本>`。目前未找到稳定可用的公开国内 CUDA wheel 镜像；实测部分国内站点返回 404 或重定向到官方源。公司内网或自建镜像可以这样传入：
+PyTorch CUDA wheel 在 `MirrorMode=China` 时默认优先使用上交源 `https://mirror.sjtu.edu.cn/pytorch-wheels/<cu版本>`，失败后回退官方源 `https://download.pytorch.org/whl/<cu版本>`。公司内网或自建镜像可以这样传入：
 
 ```powershell
 .\install-windows-nvidia-gpu.cmd -TorchIndexUrls "http://192.168.1.10/pytorch-wheels/cu128"

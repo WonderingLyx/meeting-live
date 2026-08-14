@@ -7,5 +7,8 @@ if not "%EXIT_CODE%"=="0" (
   echo.
   echo AMD GPU install failed with exit code %EXIT_CODE%.
   echo See logs\install-windows-rocm-*.log for details.
+  echo.
+  echo Press any key to close this window.
+  pause >nul
 )
 exit /b %EXIT_CODE%
