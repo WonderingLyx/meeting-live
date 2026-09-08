@@ -8,7 +8,7 @@ GPU 机器的兼容型号、驱动版本、完整 NVIDIA/AMD 命令和排错步�
 
 必须安装：
 
-1. Python 运行时。三个安装版本都只使用项目内 `.runtime\python-3.12`；没有时用 `offline\python\python.3.12.x.nupkg` 解压到项目内，不扫描主机 Python、不修改系统 PATH。
+1. Python 运行时。三个安装版本都只使用项目内 `.runtime\python-3.12`；没有时优先用 `offline\python\python.3.12.x.nupkg`，Git clone 场景缺少离线资产时会自动下载 `python.3.12.10.nupkg` 到 `.download-cache\python` 再解压。不扫描主机 Python、不修改系统 PATH。
 2. Node.js LTS，用于构建前端。
 3. FFmpeg，建议安装后确认新终端执行 `ffmpeg -version` 成功。
 
@@ -101,13 +101,13 @@ ASR_FUNASR_ALLOW_ROCM_PARAFORMER=true
 
 人脸签到在 AMD Windows 包中走 `onnxruntime-directml`，默认 `FACE_DEVICE=directml`。这与 ASR/说话人分离的 ROCm PyTorch 互不混装。
 
-AMD 不使用主机 Python。包内必须有可解压 Python 3.12 x64 运行时：
+AMD 不使用主机 Python。zip 离线包内应有可解压 Python 3.12 x64 运行时：
 
 ```text
 offline\python\python.3.12.x.nupkg
 ```
 
-安装脚本会解压到项目相对目录 `.runtime\python-3.12`，不会写 PATH，不扫描 Anaconda/系统 Python，不影响主机其它 Python/conda 服务。AMD 安装会默认重建 `.venv-rocm-win`。
+安装脚本会解压到项目相对目录 `.runtime\python-3.12`，不会写 PATH，不扫描 Anaconda/系统 Python，不影响主机其它 Python/conda 服务。通过 Git 拉代码时通常不会带这个离线文件，安装脚本会自动下载到 `.download-cache\python`；如果你加了 `-OfflineOnly`，则必须手动放入该文件。AMD 安装会默认重建 `.venv-rocm-win`。
 
 ROCm wheel 默认从包内缓存读取：
 

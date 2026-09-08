@@ -16,7 +16,7 @@
 必须安装：
 
 1. Windows 10/11 x64。
-2. Python 运行时。CPU/NVIDIA/AMD 三个安装版本都只使用项目内 `.runtime\python-3.12`；没有时用 `offline\python\python.3.12.x.nupkg` 解压到项目内，不扫描主机 Python、不修改系统 PATH。
+2. Python 运行时。CPU/NVIDIA/AMD 三个安装版本都只使用项目内 `.runtime\python-3.12`；没有时优先用 `offline\python\python.3.12.x.nupkg`，Git clone 场景缺少离线资产时会自动下载 `python.3.12.10.nupkg` 到 `.download-cache\python` 再解压。不扫描主机 Python、不修改系统 PATH。
 3. Node.js LTS，用于构建前端。
 4. FFmpeg。新开 PowerShell 后执行 `ffmpeg -version` 能正常输出。
 5. 显卡驱动。NVIDIA 用 `nvidia-smi` 验证；AMD 按下文安装指定 Adrenalin/PRO 驱动。

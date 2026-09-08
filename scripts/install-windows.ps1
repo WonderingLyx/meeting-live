@@ -5,6 +5,7 @@ param(
     [string]$VenvPath = "",
     [string]$PythonRuntimeDir = ".runtime\python-3.12",
     [string]$PythonInstaller = "",
+    [string[]]$PythonRuntimeUrls = @(),
     [string]$OfflineAssetsDir = "offline",
     [string]$RocmWheelCache = ".download-cache\rocm-win-7.2.1",
     [string]$NvidiaWheelCache = ".download-cache\nvidia-wheels",
@@ -43,6 +44,8 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "Continue"
 $env:PIP_DISABLE_PIP_VERSION_CHECK = "1"
 $StableFunasrVersion = "1.4.1"
+$PythonRuntimePackageVersion = "3.12.10"
+$PythonRuntimePackageFile = "python.$PythonRuntimePackageVersion.nupkg"
 $StableQwenAsrVersion = "0.0.6"
 $StableInsightFaceVersion = "1.0.1"
 $StableOnnxRuntimeCpuVersion = "1.29.0"
@@ -277,6 +280,179 @@ function Resolve-ProjectPath([string]$Path, [switch]$CreateDirectory) {
     return $resolved
 }
 
+function Test-PythonRuntimeArchive($Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+    $item = Get-Item -LiteralPath $Path
+    if ($item.Length -lt 5MB) {
+        return $false
+    }
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+        try {
+            $names = @{}
+            foreach ($entry in $zip.Entries) {
+                $names[$entry.FullName.Replace("/", "\").ToLowerInvariant()] = $true
+            }
+            return (
+                $names.ContainsKey("tools\python.exe") -and
+                $names.ContainsKey("tools\lib\venv\__init__.py") -and
+                $names.ContainsKey("tools\lib\ensurepip\__init__.py")
+            )
+        } finally {
+            $zip.Dispose()
+        }
+    } catch {
+        return $false
+    }
+}
+
+function Get-PythonRuntimeDownloadUrls {
+    $urls = New-Object System.Collections.ArrayList
+    Add-ListValues $urls $PythonRuntimeUrls
+    Add-ListValues $urls $env:PYTHON_RUNTIME_URLS
+    Add-UniqueValue $urls "https://globalcdn.nuget.org/packages/$PythonRuntimePackageFile"
+    return @($urls)
+}
+
+function Get-PythonRuntimeContentLength($Url) {
+    try {
+        $iwrArgs = @{
+            Uri = $Url
+            Method = "Head"
+            UseBasicParsing = $true
+            TimeoutSec = 30
+        }
+        $proxyValue = Normalize-CommandPath $Proxy
+        if (-not $proxyValue) {
+            $proxyValue = Normalize-CommandPath $env:HTTPS_PROXY
+        }
+        if (-not $proxyValue) {
+            $proxyValue = Normalize-CommandPath $env:HTTP_PROXY
+        }
+        if ($proxyValue) {
+            $iwrArgs.Proxy = $proxyValue
+        }
+        $response = Invoke-WebRequest @iwrArgs
+        $length = $response.Headers["Content-Length"]
+        if ($length) {
+            return [int64]($length | Select-Object -First 1)
+        }
+    } catch {
+    }
+    return 0
+}
+
+function Invoke-PythonRuntimeDownload($Url, $Destination, [int64]$ExpectedLength) {
+    $tempPath = "$Destination.part"
+    $lastError = ""
+    $curl = Get-Command "curl.exe" -ErrorAction SilentlyContinue
+    $proxyValue = Normalize-CommandPath $Proxy
+    if (-not $proxyValue) {
+        $proxyValue = Normalize-CommandPath $env:HTTPS_PROXY
+    }
+    if (-not $proxyValue) {
+        $proxyValue = Normalize-CommandPath $env:HTTP_PROXY
+    }
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        try {
+            if (Test-PythonRuntimeArchive $Destination) {
+                Write-Ok "Using cached $(Split-Path -Leaf $Destination)"
+                return
+            }
+            if ($curl) {
+                if (Test-Path -LiteralPath $tempPath) {
+                    $partialLength = (Get-Item -LiteralPath $tempPath).Length
+                    if ($ExpectedLength -gt 0 -and $partialLength -gt $ExpectedLength) {
+                        Remove-Item -LiteralPath $tempPath -Force
+                    } elseif ($partialLength -gt 0) {
+                        Write-Host ("Resuming Python runtime download: {0:N1} MB" -f ($partialLength / 1MB))
+                    }
+                }
+                Write-Host ("Downloading Python runtime with curl.exe (attempt {0}/4)" -f $attempt)
+                $curlArgs = @(
+                    "--fail",
+                    "--location",
+                    "--retry", "5",
+                    "--retry-delay", "2",
+                    "--connect-timeout", "30",
+                    "--continue-at", "-",
+                    "--output", $tempPath,
+                    $Url
+                )
+                if ($proxyValue) {
+                    $curlArgs = @("--proxy", $proxyValue) + $curlArgs
+                }
+                Invoke-External $curl.Source $curlArgs "curl.exe Python runtime download failed"
+            } else {
+                if (Test-Path -LiteralPath $tempPath) {
+                    Write-Warn "Invoke-WebRequest cannot resume the existing Python runtime partial file; restarting this small download."
+                    Remove-Item -LiteralPath $tempPath -Force
+                }
+                Write-Host ("Downloading Python runtime with Invoke-WebRequest (attempt {0}/4)" -f $attempt)
+                $iwrArgs = @{
+                    Uri = $Url
+                    OutFile = $tempPath
+                    UseBasicParsing = $true
+                    TimeoutSec = 1800
+                }
+                if ($proxyValue) {
+                    $iwrArgs.Proxy = $proxyValue
+                }
+                Invoke-WebRequest @iwrArgs
+            }
+            if (-not (Test-Path -LiteralPath $tempPath)) {
+                throw "download produced no file"
+            }
+            $actualLength = (Get-Item -LiteralPath $tempPath).Length
+            if ($ExpectedLength -gt 0 -and $actualLength -ne $ExpectedLength) {
+                throw "size mismatch: expected $ExpectedLength bytes, got $actualLength bytes"
+            }
+            Move-Item -LiteralPath $tempPath -Destination $Destination -Force
+            if (-not (Test-PythonRuntimeArchive $Destination)) {
+                throw "downloaded Python runtime archive failed validation"
+            }
+            return
+        } catch {
+            $lastError = $_.Exception.Message
+            Write-Warn "Python runtime download failed: $lastError"
+            Start-Sleep -Seconds ([Math]::Min(10, 2 * $attempt))
+        }
+    }
+    if (Test-Path -LiteralPath $tempPath) {
+        Write-Warn "Python runtime partial download kept for resume: $tempPath"
+    }
+    throw "Python runtime download failed after retries. Last error: $lastError"
+}
+
+function Save-PythonRuntimeAssetIfNeeded {
+    $cacheDir = Resolve-ProjectPath ".download-cache\python" -CreateDirectory
+    $target = Join-Path $cacheDir $PythonRuntimePackageFile
+    if (Test-PythonRuntimeArchive $target) {
+        Write-Ok "Using cached Python runtime asset: $target"
+        return $target
+    }
+    if ($OfflineOnly) {
+        return ""
+    }
+    $lastError = ""
+    foreach ($url in (Get-PythonRuntimeDownloadUrls)) {
+        try {
+            Write-Host "Downloading project-local Python runtime asset: $url"
+            $length = Get-PythonRuntimeContentLength $url
+            Invoke-PythonRuntimeDownload $url $target $length
+            return $target
+        } catch {
+            $lastError = $_.Exception.Message
+            Write-Warn "Python runtime source failed: $url"
+            Write-Warn $lastError
+        }
+    }
+    throw "Unable to download Python runtime asset. Put python.3.12.x.nupkg under offline\python, or set PYTHON_RUNTIME_URLS to a reachable mirror. Last error: $lastError"
+}
+
 function Test-Python312Candidate($Exe) {
     $Exe = Normalize-CommandPath $Exe
     if (-not $Exe) {
@@ -331,10 +507,7 @@ function Resolve-PythonRuntimeAssetPath {
         $assets = @(Get-ChildItem -LiteralPath $dir -File -Recurse -ErrorAction SilentlyContinue |
             Where-Object {
                 $_.Name -match "(?i)^python\.3\.12.*\.nupkg$" -or
-                $_.Name -match "(?i)^python-3\.12.*(amd64|x64).*\.(zip|nupkg)$" -or
-                $_.Name -match "(?i)^python-3\.12.*(amd64|x64).*\.exe$" -or
-                $_.Name -match "(?i)^python-3\.12.*\.exe$" -or
-                $_.Name -match "(?i)^python.*3\.12.*\.exe$"
+                $_.Name -match "(?i)^python-3\.12.*(amd64|x64).*\.(zip|nupkg)$"
             })
         if ($assets.Count -gt 0) {
             Write-Host "Python runtime asset candidates:"
@@ -344,14 +517,8 @@ function Resolve-PythonRuntimeAssetPath {
             ForEach-Object {
                 $rank = if ($_.Name -match "(?i)^python\.3\.12.*\.nupkg$") {
                     0
-                } elseif ($_.Name -match "(?i)^python-3\.12.*(amd64|x64).*\.(zip|nupkg)$") {
-                    1
-                } elseif ($_.Name -match "(?i)^python-3\.12.*(amd64|x64).*\.exe$") {
-                    2
-                } elseif ($_.Name -match "(?i)^python-3\.12.*\.exe$") {
-                    3
                 } else {
-                    4
+                    1
                 }
                 [pscustomobject]@{ Item = $_; Rank = $rank }
             } |
@@ -362,7 +529,7 @@ function Resolve-PythonRuntimeAssetPath {
             return $asset.FullName
         }
     }
-    return ""
+    return Save-PythonRuntimeAssetIfNeeded
 }
 
 function Remove-ProjectSubtree($Path) {
@@ -1868,6 +2035,7 @@ try {
         if ($PythonExe) { $args += @("-PythonExe", $PythonExe) }
         if ($PythonRuntimeDir) { $args += @("-PythonRuntimeDir", $PythonRuntimeDir) }
         if ($PythonInstaller) { $args += @("-PythonInstaller", $PythonInstaller) }
+        foreach ($url in $PythonRuntimeUrls) { $args += @("-PythonRuntimeUrls", $url) }
         if ($OfflineAssetsDir) { $args += @("-OfflineAssetsDir", $OfflineAssetsDir) }
         if ($RocmWheelCache) { $args += @("-WheelCache", $RocmWheelCache) }
         if ($RecreateVenv) { $args += "-RecreateVenv" }

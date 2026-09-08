@@ -22,11 +22,12 @@ For AMD Windows systems, use the project helper script instead of the Linux comm
 .\scripts\install-windows-rocm.cmd
 ```
 
-The script uses only the project-local Python runtime. It first reuses `.runtime\python-3.12\python.exe`; if that is missing, it extracts `offline\python\python.3.12.x.nupkg` into `.runtime\python-3.12` without changing the host PATH. It does not scan system Python, Anaconda, `py -3.12`, or `PATH`. The `.venv-rocm-win` virtual environment is recreated by default on each AMD install to avoid stale failed installs.
+The script uses only the project-local Python runtime. It first reuses `.runtime\python-3.12\python.exe`; if that is missing, it extracts `offline\python\python.3.12.x.nupkg` into `.runtime\python-3.12`. In a Git clone where the offline asset is not present, it downloads `python.3.12.10.nupkg` into `.download-cache\python` and extracts it there. It does not scan system Python, Anaconda, `py -3.12`, or `PATH`. The `.venv-rocm-win` virtual environment is recreated by default on each AMD install to avoid stale failed installs.
 
 The script is idempotent:
 
 - ROCm and PyTorch wheel files are cached under `.download-cache\rocm-win-7.2.1`.
+- The project-local Python runtime asset is cached under `.download-cache\python`.
 - Python wheels that need VPN access can be bundled under `offline\wheels`; pip checks that directory before falling back to configured indexes.
 - If ROCm PyTorch is already installed and verifies correctly, the large wheel install is skipped.
 - If project Python dependencies are already importable, dependency installation is skipped.
@@ -76,7 +77,7 @@ To build a Windows AMD package that refuses to ship without the ROCm cache and o
 Requirements:
 
 - Windows 11.
-- `offline\python\python.3.12.x.nupkg` inside the project. Do not package a Python runtime copied from the build machine.
+- `offline\python\python.3.12.x.nupkg` inside the project when building an offline zip. Git clone installs can download this asset automatically unless `-OfflineOnly` is used.
 - A supported AMD GPU / APU and matching AMD Software driver.
 - Run from this project root.
 
