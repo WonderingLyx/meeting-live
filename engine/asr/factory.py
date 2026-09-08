@@ -266,6 +266,60 @@ ASR_DOWNLOAD_ESTIMATES: dict[str, dict[str, Any]] = {
     },
 }
 
+DEFAULT_STARTUP_FALLBACKS = ("sensevoice_zh", "paraformer_full", "paraformer")
+_STARTUP_SKIP_DOWNLOAD_ENGINES = {"qwen3"}
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _startup_fallback_types(primary: str) -> list[str]:
+    raw = os.environ.get("ASR_STARTUP_FALLBACKS", "")
+    configured = tuple(item.strip() for item in raw.split(",") if item.strip())
+    candidates = [primary, *(configured or DEFAULT_STARTUP_FALLBACKS)]
+    result: list[str] = []
+    for candidate in candidates:
+        engine_type = _normalize_engine_type(candidate)
+        if engine_type in result:
+            continue
+        if not _is_valid_asr_engine_type(engine_type):
+            logger.warning("[ASR] 忽略无效启动 fallback 引擎: %s", candidate)
+            continue
+        result.append(engine_type)
+    return result
+
+
+def _managed_model_ready(category: str, name: str) -> bool:
+    try:
+        from app.services.model_resolver import local_path
+
+        path = local_path(category, name)
+    except Exception:
+        return False
+    if not os.path.isdir(path):
+        return False
+    marker = os.path.join(path, ".matrix-model-complete")
+    if os.path.isfile(marker):
+        return True
+    required = os.path.join(path, "config.json")
+    return os.path.isfile(required)
+
+
+def _startup_should_skip_download(engine_type: str) -> bool:
+    engine_type = _normalize_engine_type(engine_type)
+    if engine_type not in _STARTUP_SKIP_DOWNLOAD_ENGINES:
+        return False
+    if _env_bool("ASR_STARTUP_ALLOW_DOWNLOAD", False):
+        return False
+    estimate = ASR_DOWNLOAD_ESTIMATES.get(engine_type)
+    if not estimate:
+        return False
+    return not _managed_model_ready(estimate["category"], estimate["name"])
+
 
 def _safe_tree_size(path: str) -> int:
     total = 0
@@ -396,7 +450,7 @@ def _load_capability_overrides() -> dict[str, Any]:
     """
     global _CAPABILITY_OVERRIDES_CACHE, _CAPABILITY_OVERRIDES_CACHE_KEY
 
-    raw = os.getenv("ASR_CAPABILITIES_JSON", "").strip()
+    raw = os.getenv("ASR_CAPABILITIES_JSON", "").strip().lstrip("\ufeff")
     file_path = os.getenv("ASR_CAPABILITIES_FILE", "").strip()
     cache_key = (raw, file_path)
     if _CAPABILITY_OVERRIDES_CACHE_KEY == cache_key and _CAPABILITY_OVERRIDES_CACHE is not None:
@@ -404,7 +458,7 @@ def _load_capability_overrides() -> dict[str, Any]:
 
     if not raw and file_path:
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, "r", encoding="utf-8-sig") as f:
                 raw = f.read().strip()
                 cache_key = (raw, file_path)
         except OSError as e:
@@ -415,7 +469,7 @@ def _load_capability_overrides() -> dict[str, Any]:
             _CAPABILITY_OVERRIDES_CACHE_KEY = cache_key
             _CAPABILITY_OVERRIDES_CACHE = {}
             return _CAPABILITY_OVERRIDES_CACHE
-    if not raw:
+    if not raw or raw in {"''", '""'} or raw.startswith(("#", "//")):
         _CAPABILITY_OVERRIDES_CACHE_KEY = cache_key
         _CAPABILITY_OVERRIDES_CACHE = {}
         return _CAPABILITY_OVERRIDES_CACHE
@@ -484,6 +538,21 @@ def _dependency_status(engine_type: str) -> dict[str, Any]:
         return {"available": True}
 
     if importlib.util.find_spec(dep) is not None:
+        if dep == "funasr" and engine_type in FUNASR_ENGINE_TYPES:
+            try:
+                from .funasr_engine import rocm_windows_funasr_disabled_reason
+
+                reason = rocm_windows_funasr_disabled_reason(engine_type)
+            except Exception:
+                reason = None
+            if reason:
+                return {
+                    "available": False,
+                    "dependency": dep,
+                    "reason": reason,
+                    "install_hint": reason,
+                    "install_hint_en": reason,
+                }
         return {"available": True, "dependency": dep}
 
     pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -653,8 +722,55 @@ class ASREngineManager:
         if self._current_engine is None:
             with self._switch_lock:
                 if self._current_engine is None:
-                    self._current_engine = self._load_engine(self._current_type)
+                    self._current_engine = self._load_startup_engine()
         return self._current_engine
+
+    def _activate_engine(self, engine_type: str, engine: Any) -> None:
+        self._current_type = _normalize_engine_type(engine_type)
+        self._current_engine = engine
+        os.environ["ASR_ENGINE"] = self._current_type
+        try:
+            from app.config import config
+
+            config.audio.asr_engine = self._current_type
+        except Exception:
+            pass
+
+    def _load_startup_engine(self) -> Any:
+        primary_type = self._current_type
+        errors: list[str] = []
+        candidates = _startup_fallback_types(primary_type)
+
+        for engine_type in candidates:
+            dep_status = _dependency_status(engine_type)
+            if not dep_status.get("available", True):
+                reason = dep_status.get("install_hint") or dep_status.get("reason") or "dependency unavailable"
+                logger.warning("[ASR] 启动跳过 %s: %s", engine_type, reason)
+                errors.append(f"{engine_type}: {reason}")
+                continue
+
+            if _startup_should_skip_download(engine_type):
+                logger.warning(
+                    "[ASR] 启动跳过 %s: 本地模型未就绪且 ASR_STARTUP_ALLOW_DOWNLOAD 未开启",
+                    engine_type,
+                )
+                errors.append(f"{engine_type}: local model missing and startup download disabled")
+                continue
+
+            try:
+                engine = self._load_engine(engine_type)
+            except Exception as exc:
+                logger.warning("[ASR] 启动加载 %s 失败,尝试下一个候选: %s", engine_type, exc)
+                errors.append(f"{engine_type}: {exc}")
+                continue
+
+            if engine_type != primary_type:
+                logger.warning("[ASR] 启动 fallback 成功: %s -> %s", primary_type, engine_type)
+            self._activate_engine(engine_type, engine)
+            self._evict_except_current()
+            return engine
+
+        raise RuntimeError("ASR 启动失败,没有可用引擎: " + "; ".join(errors))
 
     def _load_engine(self, engine_type: str) -> Any:
         engine_type = _normalize_engine_type(engine_type)
@@ -755,8 +871,7 @@ class ASREngineManager:
             was_cached = engine_type in self._engine_cache
             logger.info(f"[ASR] 开始切换: {previous_type} -> {engine_type} cached={was_cached}")
             new_engine = self._load_engine(engine_type)
-            self._current_engine = new_engine
-            self._current_type = engine_type
+            self._activate_engine(engine_type, new_engine)
             self._evict_except_current()
 
             logger.info(f"[ASR] 切换成功: {previous_type} -> {engine_type}")

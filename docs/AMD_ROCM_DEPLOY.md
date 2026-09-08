@@ -22,11 +22,12 @@ For AMD Windows systems, use the project helper script instead of the Linux comm
 .\scripts\install-windows-rocm.cmd
 ```
 
-The script creates an isolated `.venv-rocm-win` environment and installs AMD's Windows ROCm 7.2.1 / PyTorch 2.9.1 ROCm wheels. It intentionally does not replace `.conda`, because the project may already have a working CPU environment.
+The script uses only the project-local Python runtime. It first reuses `.runtime\python-3.12\python.exe`; if that is missing, it extracts `offline\python\python.3.12.x.nupkg` into `.runtime\python-3.12` without changing the host PATH. It does not scan system Python, Anaconda, `py -3.12`, or `PATH`. The `.venv-rocm-win` virtual environment is recreated by default on each AMD install to avoid stale failed installs.
 
 The script is idempotent:
 
 - ROCm and PyTorch wheel files are cached under `.download-cache\rocm-win-7.2.1`.
+- Python wheels that need VPN access can be bundled under `offline\wheels`; pip checks that directory before falling back to configured indexes.
 - If ROCm PyTorch is already installed and verifies correctly, the large wheel install is skipped.
 - If project Python dependencies are already importable, dependency installation is skipped.
 - If `web\dist\index.html` already exists, the frontend build is skipped unless forced.
@@ -36,7 +37,7 @@ Useful options:
 
 ```powershell
 .\scripts\install-windows-rocm.cmd -InstallBuildTools
-.\scripts\install-windows-rocm.cmd -RecreateVenv
+.\scripts\install-windows-rocm.cmd
 .\scripts\install-windows-rocm.cmd -ForceTorch
 .\scripts\install-windows-rocm.cmd -ForceDeps
 .\scripts\install-windows-rocm.cmd -StartServer
@@ -66,16 +67,16 @@ The mirror directory must expose the same filenames as AMD's repository, for exa
 
 If a network is unstable, rerun the same command. Valid downloads are reused from `.download-cache\rocm-win-7.2.1`, and incomplete `.part` files are discarded.
 
-If Python 3.12 is not found automatically:
+To build a Windows AMD package that refuses to ship without the ROCm cache and offline Python installer:
 
 ```powershell
-.\scripts\install-windows-rocm.cmd -PythonExe "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
+.\package-windows.cmd -PackageName matrix-live-diarizer-windows-amd-api -Profile AmdRocm
 ```
 
 Requirements:
 
 - Windows 11.
-- Python 3.12 x64.
+- `offline\python\python.3.12.x.nupkg` inside the project. Do not package a Python runtime copied from the build machine.
 - A supported AMD GPU / APU and matching AMD Software driver.
 - Run from this project root.
 
@@ -194,12 +195,22 @@ Recommended AMD GPU ASR settings:
 HOST=127.0.0.1
 PORT=8000
 WORKERS=1
-ASR_ENGINE=qwen3
+ASR_ENGINE=sensevoice_zh
 ASR_DEVICE=cuda
+ASR_FUNASR_ALLOW_ROCM_GPU=false
+ASR_FUNASR_ALLOW_ROCM_PARAFORMER=false
+ASR_FUNASR_ROCM_SAFE_VERSIONS=1.4.1
 ASR_LOAD_TIMEOUT_SEC=3600
+ASR_STARTUP_ALLOW_DOWNLOAD=false
+ASR_STARTUP_FALLBACKS=sensevoice_zh,paraformer_full,paraformer
 HF_HUB_DISABLE_XET=1
 SPEAKER_ENGINE=campplus
 ```
+
+`ASR_FUNASR_ALLOW_ROCM_GPU=false` means FunASR ASR/diarization models use CPU on Windows ROCm by default. `ASR_FUNASR_ALLOW_ROCM_PARAFORMER=false` only blocks Paraformer-family FunASR models when the installed FunASR version is outside `ASR_FUNASR_ROCM_SAFE_VERSIONS`. The 2026-08-13 AMD test log loaded the Paraformer/CAM++ stack successfully with `funasr==1.4.1`; `funasr==1.4.13` crashed after `ckpt:` with process exit `-1073741819` / `0xC0000005`. Rerun the installer to downgrade FunASR if the settings page reports this version guard.
+
+If port `8000` is occupied, change `PORT` to another free port such as `8001`.
+The Windows launcher reads `HOST`, `PORT`, and `ENABLE_HTTPS` from `.env` when opening the browser.
 
 For pyannote diarization, also set `HF_TOKEN` after accepting the model terms on Hugging Face.
 

@@ -219,6 +219,13 @@ def test_from_env_empty_api_key_becomes_none(monkeypatch):
     monkeypatch.delenv("LLM_API_KEY", raising=False)
 
 
+def test_from_env_comment_placeholder_api_key_becomes_none(monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "# [必填 when 公网 LLM] Bearer token")
+    cfg = LLMConfig.from_env()
+    assert cfg.api_key is None
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+
 # ========== extractive fallback ==========
 
 def test_generate_falls_back_to_extractive_when_disabled():

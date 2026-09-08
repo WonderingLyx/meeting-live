@@ -12,13 +12,18 @@ export interface Meeting { id:string; title:string; source:'live'|'upload'; stat
 export interface Job { id:string; meeting_id:string; meeting_title:string; status:string; stage:string; progress:number; error_message?:string; cancel_requested:boolean; created_at:string }
 export interface VoiceSample { id:string; person_id:string; duration_sec:number; effective_speech_sec:number; quality_score?:number|null; embedding_dim?:number|null; model_name?:string|null; model_id?:string|null; embedding_status:'ready'|'stale'; created_at:string }
 export interface VoiceSampleUploadResult { id:string; duration_sec:number; quality_score:number; effective_speech_sec:number; model_id:string; embedding_status:string; auto_match_eligible:boolean }
-export interface Person { id:string; name:string; notes?:string; sample_count:number; total_sample_duration:number; meeting_count?:number }
-export interface PersonDetail extends Person { samples:VoiceSample[] }
+export interface FaceSample { id:string; person_id:string; embedding_dim:number; model_name:string; detection_score?:number|null; created_at:string }
+export interface FaceSampleUploadResult { id:string; person_id:string; embedding_dim:number; model_name:string; detection_score:number; face_count:number }
+export interface Person { id:string; name:string; notes?:string; sample_count:number; face_sample_count?:number; total_sample_duration:number; meeting_count?:number }
+export interface PersonDetail extends Person { samples:VoiceSample[]; face_samples?:FaceSample[] }
 export type IdentityStatus = 'anonymous'|'suggested'|'auto_matched'|'confirmed'
 export interface Speaker { id:string; label:string; person_id?:string; person_name?:string; confidence?:number; manually_confirmed:number; identity_status:IdentityStatus }
 export interface Segment { id:number; text:string; start_time:number; end_time:number; speaker_label?:string; person_name?:string; meeting_speaker_id?:string; manually_confirmed?:number; confidence?:number; manually_edited?:number; identity_status?:IdentityStatus }
 export interface MeetingNote {id:number;note_type:'summary'|'minutes'|'actions';content:string;source:string}
-export interface MeetingDetail { meeting:Meeting; speakers:Speaker[]; segments:Segment[];notes:MeetingNote[];processing_job?:Partial<Job>|null }
+export interface AttendanceRecord { id:string; meeting_id:string; person_id:string; person_name:string; source:'face'|'manual'; confidence?:number|null; first_seen_sec?:number|null; last_seen_sec?:number|null; frame_count:number; created_at:string; updated_at:string }
+export interface FaceDetection { face_index:number; bbox:number[]; detection_score:number; matched:boolean; person_id?:string|null; person_name?:string|null; confidence?:number|null; runner_up_confidence?:number|null; threshold:number; margin:number }
+export interface FaceAttendanceResponse { model_name:string; provider:string; registered_sample_count:number; detections:FaceDetection[]; checked_in:AttendanceRecord[]; attendance:AttendanceRecord[] }
+export interface MeetingDetail { meeting:Meeting; speakers:Speaker[]; segments:Segment[];notes:MeetingNote[];attendance?:AttendanceRecord[];processing_job?:Partial<Job>|null }
 
 export const listMeetings = (params:Record<string, unknown> = {}) => call<{total:number;items:Meeting[]}>({url:'/v1/meetings', params})
 export const getMeeting = (id:string) => call<MeetingDetail>({url:`/v1/meetings/${id}`})
@@ -34,7 +39,9 @@ export const getPerson = (id:string) => call<PersonDetail>({url:`/v1/people/${id
 export const createPerson = (name:string, notes='') => call<Person>({method:'POST',url:'/v1/people',data:{name,notes:notes||null}})
 export const deletePerson = (id:string) => call({method:'DELETE',url:`/v1/people/${id}`})
 export const deleteVoiceSample = (personId:string,sampleId:string) => call({method:'DELETE',url:`/v1/people/${personId}/samples/${sampleId}`})
-export async function getVoiceSampleAudioUrl(personId:string,sampleId:string) { return `/v1/people/${encodeURIComponent(personId)}/samples/${encodeURIComponent(sampleId)}/audio` }
+export const deleteFaceSample = (personId:string,sampleId:string) => call({method:'DELETE',url:`/v1/people/${personId}/face-samples/${sampleId}`})
+export function getVoiceSampleAudioUrl(personId:string,sampleId:string) { return `/v1/people/${encodeURIComponent(personId)}/samples/${encodeURIComponent(sampleId)}/audio` }
+export function getFaceSampleImageUrl(personId:string,sampleId:string) { return `/v1/people/${encodeURIComponent(personId)}/face-samples/${encodeURIComponent(sampleId)}/image` }
 export const confirmSpeaker = (meetingId:string,speakerId:string,personId:string|null) => call({method:'PATCH',url:`/v1/meetings/${meetingId}/speakers/${speakerId}/person`,data:{person_id:personId}})
 export const updateSegmentText = (meetingId:string,segmentId:number,text:string) => call({method:'PATCH',url:`/v1/meetings/${meetingId}/segments/${segmentId}`,data:{text}})
 export const assignSegmentSpeaker = (meetingId:string,segmentIds:number[],speakerId:string|null) => call<{updated:number}>({method:'PATCH',url:`/v1/meetings/${meetingId}/segments/speaker`,data:{segment_ids:segmentIds,meeting_speaker_id:speakerId}})
@@ -98,4 +105,13 @@ export async function uploadMeeting(file:File, mode:'quick'|'meeting', onProgres
   return response.data as {meeting_id:string;job_id:string}
 }
 export async function uploadVoiceSample(personId:string,file:File):Promise<VoiceSampleUploadResult> { const data=new FormData();data.append('file',file,file.name||'voice-sample.wav');return (await apiClient.post(`/v1/people/${personId}/samples`,data,{timeout:0})).data }
+export async function uploadFaceSample(personId:string,file:File):Promise<FaceSampleUploadResult> { const data=new FormData();data.append('file',file,file.name||'face-sample.jpg');return (await apiClient.post(`/v1/people/${personId}/face-samples`,data,{timeout:0})).data }
+export const getMeetingAttendance = (id:string) => call<{total:number;items:AttendanceRecord[]}>({url:`/v1/meetings/${id}/attendance`})
+export async function submitFaceAttendanceFrame(meetingId:string,file:Blob,timestampSec?:number|null) {
+  const data=new FormData()
+  data.append('file',file,'face-frame.jpg')
+  if (typeof timestampSec === 'number' && Number.isFinite(timestampSec)) data.append('timestamp_sec',String(timestampSec))
+  return call<FaceAttendanceResponse>({method:'POST',url:`/v1/meetings/${meetingId}/attendance/face-frame`,data,timeout:0})
+}
+export const setManualAttendance = (meetingId:string,personId:string,present=true) => call<{item?:AttendanceRecord;items:AttendanceRecord[]}>({method:'POST',url:`/v1/meetings/${meetingId}/attendance/manual`,data:{person_id:personId,present}})
 export async function downloadMeeting(id:string, format:'markdown'|'srt'|'vtt'|'json') { const r=await apiClient.get(`/v1/meetings/${id}/export`,{params:{format},responseType:'blob',timeout:0});const url=URL.createObjectURL(r.data);const a=document.createElement('a');a.href=url;a.download=`meeting.${format==='markdown'?'md':format}`;document.body.appendChild(a);a.click();a.remove();window.setTimeout(()=>URL.revokeObjectURL(url),10000) }

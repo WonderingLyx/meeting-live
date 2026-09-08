@@ -1,4 +1,6 @@
 import json
+import sys
+import types
 
 
 def test_diarization_status_prefers_file_engine_over_stale_env(tmp_path, monkeypatch):
@@ -99,3 +101,73 @@ def test_diarization_engine_aliases_cover_added_funasr_models():
     assert normalize_diarization_engine("campplus-cn-en") == "funasr_campplus_cn_en"
     assert normalize_diarization_engine("paraformer-large-campplus") == "funasr_paraformer_large_campplus"
     assert normalize_diarization_engine("eres2netv2") == "funasr_eres2netv2"
+
+
+def test_funasr_diarization_rocm_guard_marks_paraformer_unavailable(monkeypatch):
+    from app.services import pyannote_diarization as diarization
+    from engine.asr import funasr_engine
+
+    fake_torch = types.SimpleNamespace(
+        version=types.SimpleNamespace(hip="7.2.1"),
+        cuda=types.SimpleNamespace(is_available=lambda: True),
+        backends=types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: False)
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("ASR_FUNASR_ALLOW_ROCM_PARAFORMER", raising=False)
+    monkeypatch.setattr(funasr_engine, "_installed_funasr_version", lambda: "1.4.13")
+    monkeypatch.setattr(diarization, "_module_available", lambda name: name == "funasr")
+
+    info = diarization.get_diarization_engine_info("funasr_campplus")
+
+    assert info["available"] is False
+    assert info["dependency_available"] is False
+    assert "0xC0000005" in info["reason"]
+    assert "funasr==1.4.1" in info["install_hint"]
+
+
+def test_funasr_diarization_rocm_guard_keeps_sensevoice_available(monkeypatch):
+    from app.services import pyannote_diarization as diarization
+    from engine.asr import funasr_engine
+
+    fake_torch = types.SimpleNamespace(
+        version=types.SimpleNamespace(hip="7.2.1"),
+        cuda=types.SimpleNamespace(is_available=lambda: True),
+        backends=types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: False)
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("ASR_FUNASR_ALLOW_ROCM_PARAFORMER", raising=False)
+    monkeypatch.setattr(funasr_engine, "_installed_funasr_version", lambda: "1.4.13")
+    monkeypatch.setattr(diarization, "_module_available", lambda name: name == "funasr")
+
+    info = diarization.get_diarization_engine_info("funasr_sensevoice_campplus")
+
+    assert info["available"] is True
+
+
+def test_funasr_diarizer_guard_stops_before_model_load(monkeypatch):
+    from app.services import pyannote_diarization as diarization
+    from engine.asr import funasr_engine
+
+    fake_torch = types.SimpleNamespace(
+        version=types.SimpleNamespace(hip="7.2.1"),
+        cuda=types.SimpleNamespace(is_available=lambda: True),
+        backends=types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: False)
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("ASR_FUNASR_ALLOW_ROCM_PARAFORMER", raising=False)
+    monkeypatch.setattr(funasr_engine, "_installed_funasr_version", lambda: "1.4.13")
+    diarization.FunASRCampPlusDiarizer.reset()
+
+    diarizer = diarization.FunASRCampPlusDiarizer("funasr_campplus")
+
+    assert diarizer.enabled is False
+    assert "0xC0000005" in (diarizer.last_error or "")

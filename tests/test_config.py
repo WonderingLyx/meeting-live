@@ -1,5 +1,7 @@
 """配置模块测试"""
 
+import os
+
 
 def test_storage_config_defaults():
     from app.config import StorageConfig
@@ -13,7 +15,7 @@ def test_llm_config_defaults():
     assert cfg.enabled is False
     assert cfg.endpoint == "http://127.0.0.1:11434/v1"
     assert cfg.model == "qwen2.5:1.5b"
-    assert cfg.timeout_sec == 60
+    assert cfg.timeout_sec == 200
 
 
 def test_deployment_config_defaults_to_local():
@@ -46,6 +48,14 @@ def test_llm_config_reads_env(monkeypatch):
     assert cfg.timeout_sec == 120
 
 
+def test_llm_api_key_comment_placeholder_becomes_none(monkeypatch):
+    from app.config import LLMConfig
+
+    monkeypatch.setenv("LLM_API_KEY", "# [必填 when 公网 LLM] Bearer token")
+    cfg = LLMConfig.from_env()
+    assert cfg.api_key is None
+
+
 def test_llm_allowed_hosts_from_env(monkeypatch):
     from app.config import LLMConfig
     monkeypatch.setenv("LLM_ALLOWED_HOSTS", "127.0.0.1,192.168.1.5,::1")
@@ -67,3 +77,17 @@ def test_invalid_pyannote_device_falls_back_to_auto(monkeypatch):
     monkeypatch.setenv("PYANNOTE_DEVICE", "metal")
 
     assert SpeakerConfig.from_env().diarization_device == "auto"
+
+
+def test_load_project_env_accepts_windows_ansi_gbk(tmp_path, monkeypatch):
+    from app.config import load_project_env
+
+    key = "MATRIX_TEST_GBK_ENV_VALUE"
+    monkeypatch.delenv(key, raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_bytes(f"{key}=中文\n".encode("gb18030"))
+
+    encoding = load_project_env(env_path)
+
+    assert encoding in {"gb18030", "cp936", "mbcs"}
+    assert os.environ[key] == "中文"

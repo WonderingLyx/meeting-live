@@ -5,7 +5,7 @@ from pathlib import Path
 from contextlib import contextmanager
 
 logger = logging.getLogger("Matrix_DB")
-CURRENT_SCHEMA_VERSION = "4"
+CURRENT_SCHEMA_VERSION = "5"
 
 
 SCHEMA_SQL = """
@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS product_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO product_meta(key, value) VALUES ('schema_version', '4');
+INSERT OR IGNORE INTO product_meta(key, value) VALUES ('schema_version', '5');
 
 CREATE TABLE IF NOT EXISTS meetings (
     id                TEXT PRIMARY KEY,
@@ -86,6 +86,21 @@ CREATE INDEX IF NOT EXISTS idx_voice_samples_person ON voice_samples(person_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_voice_samples_person_audio
     ON voice_samples(person_id, audio_sha256) WHERE audio_sha256 IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS face_samples (
+    id              TEXT PRIMARY KEY,
+    person_id       TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    image_path      TEXT NOT NULL,
+    embedding       BLOB NOT NULL,
+    embedding_dim   INTEGER NOT NULL,
+    model_name      TEXT NOT NULL,
+    detection_score REAL,
+    image_sha256    TEXT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_face_samples_person ON face_samples(person_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_face_samples_person_image
+    ON face_samples(person_id, image_sha256) WHERE image_sha256 IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS meeting_speakers (
     id               TEXT PRIMARY KEY,
     meeting_id       TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
@@ -149,6 +164,26 @@ CREATE TABLE IF NOT EXISTS meeting_notes (
     UNIQUE(meeting_id, note_type)
 );
 
+CREATE TABLE IF NOT EXISTS meeting_attendance (
+    id              TEXT PRIMARY KEY,
+    meeting_id      TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    person_id       TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    source          TEXT NOT NULL DEFAULT 'face'
+                    CHECK(source IN ('face', 'manual')),
+    confidence      REAL,
+    first_seen_sec  REAL,
+    last_seen_sec   REAL,
+    frame_count     INTEGER NOT NULL DEFAULT 1,
+    snapshot_path   TEXT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(meeting_id, person_id)
+);
+CREATE INDEX IF NOT EXISTS idx_meeting_attendance_meeting
+    ON meeting_attendance(meeting_id);
+CREATE INDEX IF NOT EXISTS idx_meeting_attendance_person
+    ON meeting_attendance(person_id);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -209,7 +244,7 @@ class Database:
         row = conn.execute(
             "SELECT value FROM product_meta WHERE key = 'schema_version'"
         ).fetchone()
-        if row is None or row[0] not in {"1", "2", "3"}:
+        if row is None or row[0] not in {"1", "2", "3", "4"}:
             return
         meeting_exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meetings'"
@@ -335,6 +370,22 @@ class Database:
             raise RuntimeError(
                 "数据库结构缺少声音样本质量字段；请重启以完成 alpha schema 升级。"
             )
+        face_sample_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_samples'"
+        ).fetchone()
+        if face_sample_exists is None:
+            raise RuntimeError("数据库结构缺少人脸样本表；请重启以完成 schema 升级。")
+        face_sample_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(face_samples)").fetchall()
+        }
+        if not {"person_id", "image_path", "embedding", "embedding_dim", "model_name"} <= face_sample_columns:
+            raise RuntimeError("数据库结构缺少人脸样本字段；请重启以完成 schema 升级。")
+        attendance_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meeting_attendance'"
+        ).fetchone()
+        if attendance_exists is None:
+            raise RuntimeError("数据库结构缺少会议签到表；请重启以完成 schema 升级。")
 
     @staticmethod
     def _transcript_search_index_is_valid(conn: sqlite3.Connection) -> bool:

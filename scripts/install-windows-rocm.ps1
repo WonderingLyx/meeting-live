@@ -1,6 +1,9 @@
 param(
     [string]$PythonExe = "",
     [string]$VenvPath = ".venv-rocm-win",
+    [string]$PythonRuntimeDir = ".runtime\python-3.12",
+    [string]$PythonInstaller = "",
+    [string]$OfflineAssetsDir = "offline",
     [string]$WheelCache = ".download-cache\rocm-win-7.2.1",
     [switch]$InstallBuildTools,
     [switch]$RecreateVenv,
@@ -22,6 +25,7 @@ param(
     [string]$Aria2LowestSpeedLimit = "20K",
     [switch]$InstallAria2,
     [switch]$PrintRocmUrls,
+    [switch]$OfflineOnly,
     [switch]$StartServer
 )
 
@@ -29,9 +33,28 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "Continue"
 $env:PIP_DISABLE_PIP_VERSION_CHECK = "1"
 
+$script:NumericRuntimeThreadEnv = [ordered]@{
+    OPENBLAS_NUM_THREADS = "1"
+    OMP_NUM_THREADS = "1"
+    MKL_NUM_THREADS = "1"
+    NUMEXPR_NUM_THREADS = "1"
+    VECLIB_MAXIMUM_THREADS = "1"
+    BLIS_NUM_THREADS = "1"
+    GOTO_NUM_THREADS = "1"
+    OPENBLAS_MAIN_FREE = "1"
+}
+
 $RocmVersion = "7.2.1"
 $TorchVersion = "2.9.1+rocm7.2.1"
 $TorchVisionVersion = "0.24.1+rocm7.2.1"
+$StableFunasrVersion = "1.4.1"
+$StableQwenAsrVersion = "0.0.6"
+$StableInsightFaceVersion = "1.0.1"
+$StableOnnxRuntimeDirectmlVersion = "1.24.4"
+$StableOnnxVersion = "1.22.0"
+$StableOpenCvVersion = "4.14.0.94"
+$StablePillowVersion = "12.3.0"
+$StableScikitImageVersion = "0.26.0"
 $OfficialRocmBaseUrl = "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1"
 $ChinaPipIndexUrls = @(
     "https://pypi.tuna.tsinghua.edu.cn/simple",
@@ -68,10 +91,51 @@ function Write-Warn($Message) {
     Write-Host "[WARN] $Message" -ForegroundColor Yellow
 }
 
+function Write-Utf8NoBomText([string]$Path, [string]$Value) {
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $parent = [System.IO.Path]::GetDirectoryName($fullPath)
+    if ($parent) {
+        [System.IO.Directory]::CreateDirectory($parent) | Out-Null
+    }
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($fullPath, $Value, $encoding)
+}
+
+function Write-JsonNoBom([string]$Path, $Value) {
+    Write-Utf8NoBomText $Path (($Value | ConvertTo-Json -Depth 8) + [Environment]::NewLine)
+}
+
+function Set-NumericRuntimeThreadEnv {
+    foreach ($item in $script:NumericRuntimeThreadEnv.GetEnumerator()) {
+        [System.Environment]::SetEnvironmentVariable($item.Key, $item.Value, "Process")
+        Set-Item -Path "Env:$($item.Key)" -Value $item.Value
+    }
+}
+
 function Invoke-External($Exe, [string[]]$ArgumentList, $FailureMessage) {
-    & $Exe @ArgumentList
-    if ($LASTEXITCODE -ne 0) {
-        throw "$FailureMessage (exit code $LASTEXITCODE)"
+    $oldErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $Exe @ArgumentList 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $oldErrorActionPreference
+    }
+    if ($exitCode -ne 0) {
+        throw "$FailureMessage (exit code $exitCode)"
+    }
+}
+
+function Invoke-NativeQuietExitCode($Exe, [string[]]$ArgumentList) {
+    $oldErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $Exe @ArgumentList *> $null
+        return $LASTEXITCODE
+    } catch {
+        return 1
+    } finally {
+        $ErrorActionPreference = $oldErrorActionPreference
     }
 }
 
@@ -134,6 +198,18 @@ function Resolve-ProjectRoot {
         throw "Unable to resolve installer script directory."
     }
     return (Resolve-Path (Join-Path $scriptDir "..")).Path
+}
+
+function Resolve-ProjectPath([string]$Path, [switch]$CreateDirectory) {
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        $resolved = $Path
+    } else {
+        $resolved = Join-Path (Resolve-Path ".").Path $Path
+    }
+    if ($CreateDirectory) {
+        New-Item -ItemType Directory -Force -Path $resolved | Out-Null
+    }
+    return $resolved
 }
 
 function Initialize-InstallLog {
@@ -259,6 +335,37 @@ function Resolve-InstallerMirrors {
     }
 }
 
+function Initialize-LocalCacheDirectories {
+    $downloadRoot = Resolve-ProjectPath ".download-cache" -CreateDirectory
+    $modelRoot = Resolve-ProjectPath "models" -CreateDirectory
+    $script:ResolvedWheelCache = Resolve-ProjectPath $WheelCache -CreateDirectory
+
+    $pipCache = Join-Path $downloadRoot "pip"
+    $npmCache = Join-Path $downloadRoot "npm"
+    $hfHome = Join-Path $modelRoot "huggingface"
+    $hfHub = Join-Path $hfHome "hub"
+    $modelScope = Join-Path $modelRoot "modelscope"
+    $torchHome = Join-Path $modelRoot "torch"
+    foreach ($path in @($pipCache, $npmCache, $hfHome, $hfHub, $modelScope, $torchHome)) {
+        New-Item -ItemType Directory -Force -Path $path | Out-Null
+    }
+
+    $env:PIP_CACHE_DIR = $pipCache
+    $env:NPM_CONFIG_CACHE = $npmCache
+    $env:HF_HOME = $hfHome
+    $env:HF_HUB_CACHE = $hfHub
+    $env:MODELSCOPE_CACHE = $modelScope
+    $env:TORCH_HOME = $torchHome
+    $env:XDG_CACHE_HOME = $downloadRoot
+
+    Write-Host "ROCm artifact cache: $script:ResolvedWheelCache"
+    Write-Host "pip cache: $env:PIP_CACHE_DIR"
+    Write-Host "npm cache: $env:NPM_CONFIG_CACHE"
+    Write-Host "Hugging Face cache: $env:HF_HOME"
+    Write-Host "ModelScope cache: $env:MODELSCOPE_CACHE"
+    Write-Host "Torch cache: $env:TORCH_HOME"
+}
+
 function Assert-Windows {
     if (-not $IsWindows -and $env:OS -ne "Windows_NT") {
         throw "This script is for Windows only."
@@ -295,42 +402,181 @@ function Test-Python312Candidate($Exe) {
     return $null
 }
 
+function Get-LocalPythonCandidatePaths {
+    $paths = @()
+    if ($PythonRuntimeDir) {
+        $paths += (Join-Path (Resolve-ProjectPath $PythonRuntimeDir) "python.exe")
+    }
+    $paths += @(
+        (Resolve-ProjectPath ".runtime\python\python.exe"),
+        (Resolve-ProjectPath "tools\python312\python.exe"),
+        (Resolve-ProjectPath "offline\python\python.exe")
+    )
+    return $paths
+}
+
+function Resolve-PythonRuntimeAssetPath {
+    $candidate = Normalize-CommandPath $PythonInstaller
+    if ($candidate) {
+        if (-not (Test-PathUnderProjectRoot $candidate)) {
+            throw "-PythonInstaller must point to a Python runtime asset inside this project directory. Host/global Python installers are not used."
+        }
+        return (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
+    }
+    $searchDirs = @(
+        (Resolve-ProjectPath (Join-Path $OfflineAssetsDir "python")),
+        (Resolve-ProjectPath ".download-cache\python")
+    )
+    Write-Host "Python runtime asset search dirs:"
+    foreach ($dir in $searchDirs) {
+        Write-Host "  $dir"
+    }
+    foreach ($dir in $searchDirs) {
+        if (-not (Test-Path -LiteralPath $dir)) {
+            Write-Warn "Python installer directory not found: $dir"
+            continue
+        }
+        $assets = @(Get-ChildItem -LiteralPath $dir -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -match "(?i)^python\.3\.12.*\.nupkg$" -or
+                $_.Name -match "(?i)^python-3\.12.*(amd64|x64).*\.(zip|nupkg)$" -or
+                $_.Name -match "(?i)^python-3\.12.*(amd64|x64).*\.exe$" -or
+                $_.Name -match "(?i)^python-3\.12.*\.exe$" -or
+                $_.Name -match "(?i)^python.*3\.12.*\.exe$"
+            })
+        if ($assets.Count -gt 0) {
+            Write-Host "Python runtime asset candidates:"
+            $assets | ForEach-Object { Write-Host "  $($_.FullName)" }
+        }
+        $asset = $assets |
+            ForEach-Object {
+                $rank = if ($_.Name -match "(?i)^python\.3\.12.*\.nupkg$") {
+                    0
+                } elseif ($_.Name -match "(?i)^python-3\.12.*(amd64|x64).*\.(zip|nupkg)$") {
+                    1
+                } elseif ($_.Name -match "(?i)^python-3\.12.*(amd64|x64).*\.exe$") {
+                    2
+                } elseif ($_.Name -match "(?i)^python-3\.12.*\.exe$") {
+                    3
+                } else {
+                    4
+                }
+                [pscustomobject]@{ Item = $_; Rank = $rank }
+            } |
+            Sort-Object Rank, @{ Expression = { $_.Item.LastWriteTime }; Descending = $true } |
+            Select-Object -First 1 -ExpandProperty Item
+        if ($asset) {
+            Write-Host "Using Python runtime asset: $($asset.FullName)"
+            return $asset.FullName
+        }
+    }
+    return ""
+}
+
+function Remove-ProjectSubtree($Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    $root = (Resolve-Path -LiteralPath ".").Path
+    $target = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+    if ($target -eq $root -or -not $target.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to remove outside project: $target"
+    }
+    Remove-Item -LiteralPath $target -Recurse -Force
+}
+
+function Expand-PortablePythonRuntime($ArchivePath, $TargetDir) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $parent = Split-Path -Parent $TargetDir
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    $extractDir = Join-Path $parent ("python-extract-{0}" -f ([System.Guid]::NewGuid().ToString("N")))
+    Remove-ProjectSubtree $TargetDir
+    New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
+    try {
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $extractDir)
+        $sourceDir = Join-Path $extractDir "tools"
+        if (-not (Test-Path -LiteralPath (Join-Path $sourceDir "python.exe"))) {
+            $sourceDir = $extractDir
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $sourceDir "python.exe"))) {
+            throw "Portable Python archive does not contain python.exe at root or tools\python.exe: $ArchivePath"
+        }
+        Get-ChildItem -LiteralPath $sourceDir -Force | Copy-Item -Destination $TargetDir -Recurse -Force
+    } finally {
+        Remove-ProjectSubtree $extractDir
+    }
+}
+
+function Install-LocalPythonRuntimeIfAvailable {
+    foreach ($candidate in (Get-LocalPythonCandidatePaths)) {
+        $python = Test-Python312Candidate $candidate
+        if ($python) {
+            return $python
+        }
+    }
+
+    $asset = Resolve-PythonRuntimeAssetPath
+    if (-not $asset) {
+        return ""
+    }
+
+    $targetDir = Resolve-ProjectPath $PythonRuntimeDir
+    $extension = [System.IO.Path]::GetExtension($asset).ToLowerInvariant()
+    Write-Host "Preparing project-local Python 3.12 runtime:"
+    Write-Host "  asset:  $asset"
+    Write-Host "  target:    $targetDir"
+    if ($extension -eq ".nupkg" -or $extension -eq ".zip") {
+        Expand-PortablePythonRuntime $asset $targetDir
+    } else {
+        Remove-ProjectSubtree $targetDir
+        New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+        Invoke-External $asset @(
+            "/quiet",
+            "InstallAllUsers=0",
+            "TargetDir=$targetDir",
+            "PrependPath=0",
+            "Include_pip=1",
+            "Include_launcher=0",
+            "Include_tcltk=0",
+            "Include_test=0",
+            "Shortcuts=0",
+            "AssociateFiles=0"
+        ) "Project-local Python installation failed"
+    }
+
+    $runtimePython = Join-Path $targetDir "python.exe"
+    $python = Test-Python312Candidate $runtimePython
+    if ($python) {
+        return $python
+    }
+    throw "Project-local Python runtime asset was applied but Python 3.12 was not usable at $runtimePython. Prefer offline\python\python.3.12.x.nupkg over the Windows .exe installer."
+}
+
+function Test-PathUnderProjectRoot($Path) {
+    if (-not $Path) {
+        return $false
+    }
+    try {
+        $root = (Resolve-Path -LiteralPath ".").Path
+        $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+        return $resolved.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)
+    } catch {
+        return $false
+    }
+}
+
 function Find-Python312($Preferred) {
     $candidates = @()
     if ($Preferred) {
+        if (-not (Test-PathUnderProjectRoot $Preferred)) {
+            throw "-PythonExe is restricted to this project directory for AMD installs. Host Python is disabled. Put python.3.12.x.nupkg under offline\python, or keep Python under .runtime\python-3.12."
+        }
         $candidates += $Preferred
     }
-    if ($env:PYTHON312) {
-        $candidates += $env:PYTHON312
-    }
-
-    $commonPaths = @(
-        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
-        (Join-Path $env:ProgramFiles "Python312\python.exe"),
-        (Join-Path ${env:ProgramFiles(x86)} "Python312\python.exe")
-    )
-    foreach ($path in $commonPaths) {
-        if ($path -and (Test-Path -LiteralPath $path)) {
-            $candidates += $path
-        }
-    }
-
-    $pyLauncher = Get-Command "py" -ErrorAction SilentlyContinue
-    if ($pyLauncher) {
-        try {
-            $py312 = & $pyLauncher.Source -3.12 -c "import sys; print(sys.executable)" 2>$null
-            if ($LASTEXITCODE -eq 0 -and $py312) {
-                $candidates += ($py312 | Select-Object -First 1)
-            }
-        } catch {
-        }
-    }
-
-    foreach ($cmd in @("python3.12", "python")) {
-        $found = Get-Command $cmd -ErrorAction SilentlyContinue
-        if ($found) {
-            $candidates += $found.Source
-        }
+    $localPython = Install-LocalPythonRuntimeIfAvailable
+    if ($localPython) {
+        $candidates += $localPython
     }
 
     $seen = @{}
@@ -345,7 +591,7 @@ function Find-Python312($Preferred) {
             return $python
         }
     }
-    throw "Python 3.12 x64 was not found. Install Python 3.12, or run with -PythonExe C:\Path\To\Python312\python.exe."
+    throw "Project-local Python 3.12 runtime was not found. Put python.3.12.x.nupkg under offline\python, or keep an extracted runtime under .runtime\python-3.12. Host Python is intentionally not used."
 }
 
 function Assert-Python312($Exe) {
@@ -353,9 +599,9 @@ function Assert-Python312($Exe) {
     $versionJson = & $Exe -c "import json,sys; print(json.dumps({'major':sys.version_info.major,'minor':sys.version_info.minor,'exe':sys.executable}))"
     $info = $versionJson | ConvertFrom-Json
     if ($info.major -ne 3 -or $info.minor -ne 12) {
-        throw "AMD ROCm Windows PyTorch wheels require Python 3.12. Current: Python $($info.major).$($info.minor) at $($info.exe). Pass -PythonExe C:\Path\To\Python312\python.exe."
+        throw "AMD ROCm Windows PyTorch wheels require the selected installer runtime to be Python 3.12. Current: Python $($info.major).$($info.minor) at $($info.exe). This check does not constrain other Python environments on the host."
     }
-    Write-Ok "Python: $($info.exe)"
+    Write-Ok "Installer Python runtime: $($info.exe)"
 }
 
 function Test-MSVCBuildTools {
@@ -476,7 +722,15 @@ function Test-PackagesInstalled($Python, $Artifacts) {
 
 function Test-RocmTorchReady($Python) {
     try {
-        $code = "import torch; print(torch.__version__); print(torch.version.hip or ''); print(torch.cuda.is_available())"
+        $code = @"
+import os
+for key in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS', 'BLIS_NUM_THREADS', 'GOTO_NUM_THREADS', 'OPENBLAS_MAIN_FREE'):
+    os.environ.setdefault(key, '1')
+import torch
+print(torch.__version__)
+print(torch.version.hip or '')
+print(torch.cuda.is_available())
+"@
         $lines = @(& $Python -c $code 2>$null)
         if ($LASTEXITCODE -ne 0 -or $lines.Count -lt 2) {
             return $false
@@ -730,6 +984,10 @@ function Save-ArtifactIfNeeded($Artifact, $CacheDir) {
         Write-Warn "Remote size is unknown; keeping partial file for resumable downloader instead of treating it as complete."
     }
 
+    if ($OfflineOnly) {
+        throw "Offline artifact missing or incomplete: $target. Put $($Artifact.File) under $CacheDir, or rerun without -OfflineOnly to allow download."
+    }
+
     Write-Host "Downloading $($Artifact.File)"
     $lastError = ""
     foreach ($url in $sourceUrls) {
@@ -765,7 +1023,11 @@ function Save-ArtifactIfNeeded($Artifact, $CacheDir) {
 function Show-RocmDownloadPlan {
     Write-Host ""
     Write-Host "ROCm artifact cache:" -ForegroundColor Cyan
-    Write-Host (Join-Path (Resolve-Path ".").Path $WheelCache)
+    if ($script:ResolvedWheelCache) {
+        Write-Host $script:ResolvedWheelCache
+    } else {
+        Write-Host (Resolve-ProjectPath $WheelCache)
+    }
     Write-Host ""
     Write-Host "Download these files into that directory, then rerun the installer:" -ForegroundColor Cyan
     foreach ($artifact in @($RocmRuntimeArtifacts + $TorchArtifacts)) {
@@ -780,12 +1042,18 @@ function Show-RocmDownloadPlan {
 
 function Invoke-PipInstallWithMirrors($Python, [string[]]$InstallArgs, $Description) {
     $lastError = ""
+    $offlineWheelArgs = @()
+    $offlineWheels = Resolve-ProjectPath (Join-Path $OfflineAssetsDir "wheels")
+    if (Test-Path -LiteralPath $offlineWheels) {
+        $offlineWheelArgs = @("--find-links", $offlineWheels)
+        Write-Host "offline wheels: $offlineWheels"
+    }
     foreach ($indexUrl in $script:ResolvedPipIndexUrls) {
         try {
             Write-Host "pip index: $indexUrl"
             $args = @(
                 "-m", "pip"
-            ) + $InstallArgs + @(
+            ) + $InstallArgs + $offlineWheelArgs + @(
                 "--index-url", $indexUrl,
                 "--retries", "5",
                 "--timeout", "120",
@@ -816,7 +1084,33 @@ function Install-ArtifactGroup($Python, $Artifacts, $CacheDir, $Description, $Fo
 
 function Test-ProjectDepsReady($Python) {
     try {
-        $code = "import importlib.util; mods=['uvicorn','fastapi','qwen_asr','funasr','modelscope','librosa','soundfile']; missing=[m for m in mods if importlib.util.find_spec(m) is None]; print(','.join(missing)); raise SystemExit(1 if missing else 0)"
+        $code = @"
+import importlib.metadata as md
+import importlib.util
+
+missing = [
+    m
+    for m in ('uvicorn', 'fastapi', 'qwen_asr', 'funasr', 'modelscope', 'librosa', 'soundfile')
+    if importlib.util.find_spec(m) is None
+]
+
+def version(dist):
+    try:
+        return md.version(dist).split('+', 1)[0]
+    except Exception:
+        return None
+
+for dist, expected in {
+    'funasr': '$StableFunasrVersion',
+    'qwen-asr': '$StableQwenAsrVersion',
+}.items():
+    current = version(dist)
+    if current != expected:
+        missing.append(f'{dist}=={expected}(current={current})')
+
+print(','.join(missing))
+raise SystemExit(1 if missing else 0)
+"@
         $missing = & $Python -c $code 2>$null
         if ($LASTEXITCODE -eq 0) {
             return $true
@@ -836,10 +1130,136 @@ function Install-ProjectDeps($Python, $Force) {
     }
     $tempRequirements = Join-Path $env:TEMP "matrix-live-diarizer-requirements-no-torch.txt"
     Get-Content -LiteralPath "requirements.txt" -Encoding UTF8 |
-        Where-Object { $_ -notmatch "^\s*(torch|torchaudio|torchvision|chromadb|chroma-hnswlib|pyannote\.audio)([=<>!~ ;]|$)" } |
+        Where-Object { $_ -notmatch "^\s*(torch|torchaudio|torchvision|chromadb|chroma-hnswlib|pyannote\.audio|insightface|onnxruntime|onnxruntime-gpu|onnxruntime-directml|onnx|opencv-python|opencv-python-headless|Pillow|scikit-image)([=<>!~ ;]|$)" } |
         Set-Content -LiteralPath $tempRequirements -Encoding UTF8
     Invoke-PipInstallWithMirrors $Python @("install", "-r", $tempRequirements) "Failed to install project dependencies"
     Invoke-External $Python @("-m", "pip", "check") "pip check failed"
+}
+
+function Test-FaceRuntimeReady($Python) {
+    try {
+        $code = @"
+import importlib.metadata as md
+import importlib.util
+missing=[m for m in ('insightface','onnxruntime','cv2') if importlib.util.find_spec(m) is None]
+if missing:
+    print('missing=' + ','.join(missing))
+    raise SystemExit(1)
+import cv2
+import insightface
+from insightface.app import FaceAnalysis
+import onnxruntime as ort
+providers=ort.get_available_providers()
+print('onnxruntime_providers=' + ','.join(providers))
+print('opencv=' + getattr(cv2, '__version__', 'unknown'))
+print('insightface=' + getattr(insightface, '__version__', 'unknown'))
+def version(dist):
+    try:
+        return md.version(dist).split('+', 1)[0]
+    except Exception:
+        return None
+mismatched = []
+for dist, wanted in {
+    'insightface': '$StableInsightFaceVersion',
+    'onnxruntime-directml': '$StableOnnxRuntimeDirectmlVersion',
+    'onnx': '$StableOnnxVersion',
+    'Pillow': '$StablePillowVersion',
+    'scikit-image': '$StableScikitImageVersion',
+}.items():
+    current = version(dist)
+    if current != wanted:
+        mismatched.append(f'{dist}=={wanted}(current={current})')
+opencv_current = version('opencv-python-headless') or version('opencv-python')
+if opencv_current != '$StableOpenCvVersion':
+    mismatched.append(f'opencv-python-headless/opencv-python==$StableOpenCvVersion(current={opencv_current})')
+if mismatched:
+    print('version_mismatch=' + ','.join(mismatched))
+    raise SystemExit(3)
+raise SystemExit(0 if 'DmlExecutionProvider' in providers else 2)
+"@
+        & $Python -c $code
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
+function Test-Cv2Ready($Python) {
+    $oldErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $lines = @(& $Python -c "import cv2; print('opencv=' + getattr(cv2, '__version__', 'unknown'))" 2>$null)
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0) {
+            foreach ($line in $lines) {
+                Write-Host $line
+            }
+            return $true
+        }
+        return $false
+    } catch {
+        return $false
+    } finally {
+        $ErrorActionPreference = $oldErrorActionPreference
+    }
+}
+
+function Install-OpenCvForFace($Python) {
+    if (Test-Cv2Ready $Python) {
+        Write-Ok "OpenCV cv2 import is already available."
+        return
+    }
+    Write-Host "Cleaning existing OpenCV packages before installing cv2 runtime."
+    [void](Invoke-NativeQuietExitCode $Python @("-m", "pip", "uninstall", "-y", "opencv-python", "opencv-python-headless"))
+    $lastError = ""
+    foreach ($package in @("opencv-python-headless==$StableOpenCvVersion", "opencv-python==$StableOpenCvVersion")) {
+        try {
+            Invoke-PipInstallWithMirrors $Python @(
+                "install",
+                $package,
+                "--prefer-binary"
+            ) "Failed to install $package"
+            if (Test-Cv2Ready $Python) {
+                return
+            }
+            $lastError = "$package installed but import cv2 still failed"
+            Write-Warn $lastError
+        } catch {
+            $lastError = $_.Exception.Message
+            Write-Warn "OpenCV package failed: $package"
+            Write-Warn $lastError
+        }
+    }
+    throw "Failed to install an OpenCV package that provides cv2. Last error: $lastError"
+}
+
+function Install-FaceDeps($Python) {
+    if (-not $ForceDeps -and (Test-FaceRuntimeReady $Python)) {
+        Write-Ok "Face recognition runtime already installed; skipping."
+        return
+    }
+    Invoke-PipInstallWithMirrors $Python @(
+        "install",
+        "onnxruntime-directml==$StableOnnxRuntimeDirectmlVersion",
+        "numpy>=1.24.0,<3.0.0",
+        "scipy>=1.10.0,<2.0.0",
+        "onnx==$StableOnnxVersion",
+        "Pillow==$StablePillowVersion",
+        "scikit-image==$StableScikitImageVersion",
+        "tqdm>=4.66.0,<5.0.0",
+        "requests>=2.31.0,<3.0.0",
+        "--prefer-binary"
+    ) "Failed to install ONNXRuntime DirectML face dependencies"
+    Install-OpenCvForFace $Python
+    Invoke-PipInstallWithMirrors $Python @(
+        "install",
+        "insightface==$StableInsightFaceVersion",
+        "--no-deps",
+        "--prefer-binary"
+    ) "Failed to install InsightFace"
+    if (-not (Test-FaceRuntimeReady $Python)) {
+        throw "Face recognition runtime verification failed. Check that insightface, onnxruntime-directml, and cv2 are importable in this virtual environment."
+    }
 }
 
 function Set-EnvFileValue($Path, $Key, $Value) {
@@ -862,12 +1282,79 @@ function Set-EnvFileValue($Path, $Key, $Value) {
     Set-Content -LiteralPath $Path -Value $out -Encoding UTF8
 }
 
+function Repair-EnvSecretPlaceholders($Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    $secretKeys = @(
+        "LLM_API_KEY",
+        "ASR_API_KEY",
+        "SPEAKER_API_KEY",
+        "DIARIZATION_API_KEY",
+        "FACE_API_KEY",
+        "HF_TOKEN",
+        "HUGGINGFACE_TOKEN",
+        "HUGGINGFACE_HUB_TOKEN",
+        "MODELSCOPE_API_TOKEN",
+        "MODELSCOPE_TOKEN"
+    )
+    $lines = Get-Content -LiteralPath $Path -Encoding UTF8
+    $changed = $false
+    $out = New-Object System.Collections.ArrayList
+    foreach ($line in $lines) {
+        $replaced = $false
+        foreach ($key in $secretKeys) {
+            $pattern = "^\s*" + [regex]::Escape($key) + "\s*=(.*)$"
+            if ($line -match $pattern) {
+                $value = [string]$Matches[1]
+                $trimmed = $value.Trim()
+                $firstCharCode = if ($trimmed.Length -gt 0) { [int][char]$trimmed[0] } else { -1 }
+                if ($trimmed.StartsWith("#") -or $firstCharCode -eq 0xFF03) {
+                    $cleanedSecretLine = $key + "="
+                    [void]$out.Add($cleanedSecretLine)
+                    $changed = $true
+                } else {
+                    [void]$out.Add($line)
+                }
+                $replaced = $true
+                break
+            }
+        }
+        if (-not $replaced) {
+            [void]$out.Add($line)
+        }
+    }
+    if ($changed) {
+        Set-Content -LiteralPath $Path -Value $out -Encoding UTF8
+        Write-Ok "Cleaned placeholder API key values in $Path"
+    }
+}
+
 function Ensure-EnvConfig {
     if (-not (Test-Path ".env")) {
         Copy-Item -LiteralPath ".env.example" -Destination ".env"
     }
-    Set-EnvFileValue ".env" "ASR_ENGINE" "qwen3"
+    Repair-EnvSecretPlaceholders ".env"
+    Set-EnvFileValue ".env" "MODELS_DIR" "./models"
+    Set-EnvFileValue ".env" "HF_HOME" "./models/huggingface"
+    Set-EnvFileValue ".env" "HF_HUB_CACHE" "./models/huggingface/hub"
+    Set-EnvFileValue ".env" "MODELSCOPE_CACHE" "./models/modelscope"
+    Set-EnvFileValue ".env" "TORCH_HOME" "./models/torch"
+    Set-EnvFileValue ".env" "OPENBLAS_NUM_THREADS" "1"
+    Set-EnvFileValue ".env" "OMP_NUM_THREADS" "1"
+    Set-EnvFileValue ".env" "MKL_NUM_THREADS" "1"
+    Set-EnvFileValue ".env" "NUMEXPR_NUM_THREADS" "1"
+    Set-EnvFileValue ".env" "VECLIB_MAXIMUM_THREADS" "1"
+    Set-EnvFileValue ".env" "BLIS_NUM_THREADS" "1"
+    Set-EnvFileValue ".env" "GOTO_NUM_THREADS" "1"
+    Set-EnvFileValue ".env" "OPENBLAS_MAIN_FREE" "1"
+    Set-EnvFileValue ".env" "ASR_ENGINE" "sensevoice_zh"
+    Set-EnvFileValue ".env" "ASR_STARTUP_ALLOW_DOWNLOAD" "false"
+    Set-EnvFileValue ".env" "ASR_STARTUP_FALLBACKS" "sensevoice_zh,paraformer_full,paraformer"
     Set-EnvFileValue ".env" "ASR_DEVICE" "cuda"
+    Set-EnvFileValue ".env" "ASR_FUNASR_ALLOW_ROCM_GPU" "false"
+    Set-EnvFileValue ".env" "ASR_FUNASR_ALLOW_ROCM_PARAFORMER" "false"
+    Set-EnvFileValue ".env" "ASR_FUNASR_ROCM_SAFE_VERSIONS" $StableFunasrVersion
     Set-EnvFileValue ".env" "ASR_LOAD_TIMEOUT_SEC" "3600"
     Set-EnvFileValue ".env" "SPEAKER_ENGINE" "campplus"
     Set-EnvFileValue ".env" "SPEAKER_DEVICE" "cuda"
@@ -882,6 +1369,15 @@ function Ensure-EnvConfig {
         Set-EnvFileValue ".env" "HF_ENDPOINT" $script:ResolvedHfEndpoint
     }
     Set-EnvFileValue ".env" "PYANNOTE_ROCM_DISABLE_LSTM_DROPOUT" "1"
+    Set-EnvFileValue ".env" "LLM_TIMEOUT_SEC" "200"
+    Set-EnvFileValue ".env" "FACE_RECOGNITION_ENABLED" "true"
+    Set-EnvFileValue ".env" "FACE_PROVIDER" "insightface"
+    Set-EnvFileValue ".env" "FACE_ENDPOINT" "file://./models/face/insightface"
+    Set-EnvFileValue ".env" "FACE_MODEL" "buffalo_l"
+    Set-EnvFileValue ".env" "FACE_DEVICE" "directml"
+    Set-EnvFileValue ".env" "FACE_MATCH_THRESHOLD" "0.55"
+    Set-EnvFileValue ".env" "FACE_MATCH_MARGIN" "0.08"
+    Set-EnvFileValue ".env" "FACE_FRAME_INTERVAL_SEC" "5"
 }
 
 function Ensure-ModelSettings {
@@ -890,10 +1386,29 @@ function Ensure-ModelSettings {
     if (Test-Path -LiteralPath $path) {
         try {
             $settings = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
-            Set-JsonProperty (Ensure-JsonObjectProperty $settings "asr") "device" "cuda"
+            $asrSettings = Ensure-JsonObjectProperty $settings "asr"
+            $currentAsrModel = ""
+            if ($asrSettings.PSObject.Properties["model"]) {
+                $currentAsrModel = [string]$asrSettings.model
+            }
+            if (-not $currentAsrModel -or $currentAsrModel -eq "qwen3") {
+                Set-JsonProperty $asrSettings "model" "sensevoice_zh"
+                Set-JsonProperty $asrSettings "provider" "modelscope"
+                Set-JsonProperty $asrSettings "endpoint" "https://modelscope.cn"
+            }
+            Set-JsonProperty $asrSettings "device" "cuda"
             Set-JsonProperty (Ensure-JsonObjectProperty $settings "speaker") "device" "cuda"
             Set-JsonProperty (Ensure-JsonObjectProperty $settings "diarization") "device" "cuda"
-            $settings | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+            Set-JsonProperty (Ensure-JsonObjectProperty $settings "face") "device" "directml"
+            Set-JsonProperty (Ensure-JsonObjectProperty $settings "face") "model" "buffalo_l"
+            Set-JsonProperty (Ensure-JsonObjectProperty $settings "face") "provider" "insightface"
+            Set-JsonProperty (Ensure-JsonObjectProperty $settings "face") "endpoint" "file://./models/face/insightface"
+            Set-JsonProperty (Ensure-JsonObjectProperty $settings "face") "enabled" $true
+            Set-JsonProperty (Ensure-JsonObjectProperty $settings "face") "match_threshold" 0.55
+            Set-JsonProperty (Ensure-JsonObjectProperty $settings "face") "match_margin" 0.08
+            Set-JsonProperty (Ensure-JsonObjectProperty $settings "face") "frame_interval_sec" 5
+            Set-JsonProperty (Ensure-JsonObjectProperty $settings "llm") "timeout_sec" 200
+            Write-JsonNoBom $path $settings
             Write-Ok "Updated $path devices for AMD GPU"
         } catch {
             Write-Warn "Existing model settings could not be updated for AMD GPU: $($_.Exception.Message)"
@@ -906,7 +1421,7 @@ function Ensure-ModelSettings {
             provider = "modelscope"
             endpoint = "https://modelscope.cn"
             api_key = ""
-            model = "qwen3"
+            model = "sensevoice_zh"
             device = "cuda"
             word_timestamps = $false
             load_timeout_sec = 3600
@@ -927,6 +1442,17 @@ function Ensure-ModelSettings {
             command = ""
             device = "cuda"
         }
+        face = [ordered]@{
+            provider = "insightface"
+            endpoint = "file://./models/face/insightface"
+            api_key = ""
+            model = "buffalo_l"
+            device = "directml"
+            enabled = $true
+            match_threshold = 0.55
+            match_margin = 0.08
+            frame_interval_sec = 5
+        }
         llm = [ordered]@{
             provider = "ollama"
             endpoint = "http://127.0.0.1:11434/v1"
@@ -934,12 +1460,12 @@ function Ensure-ModelSettings {
             model = "qwen2.5:1.5b"
             enabled = $false
             allow_public = $false
-            timeout_sec = 180
+            timeout_sec = 200
             max_input_tokens = 8000
             mock = $false
         }
     }
-    $settings | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+    Write-JsonNoBom $path $settings
     Write-Ok "Created $path"
 }
 
@@ -1003,10 +1529,12 @@ function Ensure-FrontendBuild($Force, $Skip) {
 
 function Write-StartScripts {
     $defaultVenv = $VenvPath
+    $activeDir = Resolve-ProjectPath ".runtime" -CreateDirectory
+    Set-Content -LiteralPath (Join-Path $activeDir "active-venv.txt") -Value $defaultVenv -Encoding ASCII
     $launcher = @"
 param(
     [string]`$VenvPath = "$defaultVenv",
-    [string]`$Url = "http://127.0.0.1:8000",
+    [string]`$Url = "",
     [switch]`$NoBrowser
 )
 
@@ -1023,11 +1551,133 @@ if (-not `$Root) {
     throw "Unable to resolve project directory."
 }
 
+`$script:TranscriptStarted = `$false
+`$script:StartLogPath = `$null
+`$logDir = Join-Path `$Root "logs"
+try {
+    New-Item -ItemType Directory -Force -Path `$logDir | Out-Null
+    `$script:StartLogPath = Join-Path `$logDir ("start-windows-{0}.log" -f (Get-Date -Format "yyyyMMdd-HHmmss"))
+    Start-Transcript -LiteralPath `$script:StartLogPath -Append | Out-Null
+    `$script:TranscriptStarted = `$true
+    Write-Host "Startup log: `$script:StartLogPath"
+} catch {
+    Write-Warning "Startup logging is unavailable: `$(`$_.Exception.Message)"
+}
+
+function Stop-StartupTranscript {
+    if (`$script:TranscriptStarted) {
+        try {
+            Stop-Transcript | Out-Null
+        } catch {
+        }
+        `$script:TranscriptStarted = `$false
+    }
+}
+
+trap {
+    Write-Host ""
+    Write-Host "[ERROR] `$(`$_.Exception.Message)" -ForegroundColor Red
+    if (`$script:StartLogPath) {
+        Write-Host "Latest startup log: `$script:StartLogPath"
+    }
+    Stop-StartupTranscript
+    exit 1
+}
+
+function Get-EnvFileValue([string]`$Key, [string]`$Default = "") {
+    `$processValue = [System.Environment]::GetEnvironmentVariable(`$Key, "Process")
+    if (`$processValue) {
+        return `$processValue
+    }
+    `$envPath = Join-Path `$Root ".env"
+    if (-not (Test-Path -LiteralPath `$envPath)) {
+        return `$Default
+    }
+    foreach (`$line in (Get-Content -LiteralPath `$envPath -Encoding UTF8)) {
+        `$pattern = '^\s*' + [regex]::Escape(`$Key) + '\s*=\s*(.*)'
+        if (`$line -match `$pattern) {
+            `$value = `$Matches[1].Trim()
+            `$value = `$value -replace "\s+#.*$", ""
+            `$value = `$value.Trim().Trim("'").Trim('"')
+            if (`$value) {
+                return `$value
+            }
+            return `$Default
+        }
+    }
+    return `$Default
+}
+
+function Get-StartUrl {
+    if (`$Url) {
+        return `$Url
+    }
+    `$hostValue = (Get-EnvFileValue "HOST" "127.0.0.1").Trim()
+    `$portValue = (Get-EnvFileValue "PORT" "8000").Trim()
+    `$httpsValue = (Get-EnvFileValue "ENABLE_HTTPS" "false").Trim().ToLowerInvariant()
+    `$portNumber = 8000
+    if (-not [int]::TryParse(`$portValue, [ref]`$portNumber) -or `$portNumber -le 0 -or `$portNumber -gt 65535) {
+        Write-Warning "Invalid PORT=`$portValue in .env; falling back to 8000."
+        `$portNumber = 8000
+    }
+    if (-not `$hostValue -or `$hostValue -eq "0.0.0.0" -or `$hostValue -eq "::" -or `$hostValue -eq "*") {
+        `$hostValue = "127.0.0.1"
+    } elseif (`$hostValue.Contains(":") -and -not `$hostValue.StartsWith("[")) {
+        `$hostValue = "[`$hostValue]"
+    }
+    `$scheme = if (`$httpsValue -in @("1", "true", "yes", "on")) { "https" } else { "http" }
+    return "`${scheme}://`${hostValue}:`${portNumber}"
+}
+
+function Test-TcpPortOpen([string]`$TargetHost, [int]`$PortNumber) {
+    try {
+        `$client = New-Object System.Net.Sockets.TcpClient
+        `$async = `$client.BeginConnect(`$TargetHost, `$PortNumber, `$null, `$null)
+        `$connected = `$async.AsyncWaitHandle.WaitOne(300)
+        if (`$connected) {
+            `$client.EndConnect(`$async)
+        }
+        `$client.Close()
+        return [bool]`$connected
+    } catch {
+        return `$false
+    }
+}
+
+function Test-LocalPortInUse([int]`$PortNumber) {
+    try {
+        `$listener = Get-NetTCPConnection -State Listen -LocalPort `$PortNumber -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if (`$listener) {
+            return `$true
+        }
+    } catch {
+    }
+    return Test-TcpPortOpen "127.0.0.1" `$PortNumber
+}
+
+function Get-PortFromUrl([string]`$TargetUrl) {
+    try {
+        `$uri = [Uri]`$TargetUrl
+        return `$uri.Port
+    } catch {
+        return 8000
+    }
+}
+
 `$candidateVenvs = @()
 if (`$VenvPath) {
     `$candidateVenvs += `$VenvPath
+} else {
+    `$activeVenvPath = Join-Path `$Root ".runtime\active-venv.txt"
+    if (Test-Path -LiteralPath `$activeVenvPath) {
+        `$activeVenv = (Get-Content -LiteralPath `$activeVenvPath -TotalCount 1).Trim()
+        if (`$activeVenv) {
+            `$candidateVenvs += `$activeVenv
+        }
+    }
 }
-`$candidateVenvs += @(".venv-rocm-win", ".venv-win")
+`$candidateVenvs += @(".venv-rocm-win", ".venv-win", ".venv-nvidia-win")
 
 `$seen = @{}
 `$Python = `$null
@@ -1044,11 +1694,40 @@ foreach (`$candidate in `$candidateVenvs) {
 }
 
 if (-not `$Python) {
-    throw "Python environment not found. Run .\install-windows.cmd first, or pass -VenvPath .venv-rocm-win."
+    throw "Python environment not found. Run exactly one installer first: .\install-windows.cmd, .\install-windows-amd-gpu.cmd, or .\install-windows-nvidia-gpu.cmd. You can also pass -VenvPath explicitly."
 }
+Write-Host "Using Python: `$Python"
 
 Set-Location `$Root
+`$env:OPENBLAS_NUM_THREADS = "1"
+`$env:OMP_NUM_THREADS = "1"
+`$env:MKL_NUM_THREADS = "1"
+`$env:NUMEXPR_NUM_THREADS = "1"
+`$env:VECLIB_MAXIMUM_THREADS = "1"
+`$env:BLIS_NUM_THREADS = "1"
+`$env:GOTO_NUM_THREADS = "1"
+`$env:OPENBLAS_MAIN_FREE = "1"
 `$env:HF_HUB_DISABLE_XET = "1"
+
+`$ResolvedUrl = Get-StartUrl
+Write-Host "Open URL: `$ResolvedUrl"
+`$ResolvedPort = Get-PortFromUrl `$ResolvedUrl
+if (Test-LocalPortInUse `$ResolvedPort) {
+    try {
+        `$healthUrl = "`$ResolvedUrl/health"
+        `$response = Invoke-WebRequest -Uri `$healthUrl -UseBasicParsing -TimeoutSec 2
+        if (`$response.StatusCode -ge 200 -and `$response.StatusCode -lt 500) {
+            Write-Host "Service already running at `$ResolvedUrl"
+            if (-not `$NoBrowser) {
+                Start-Process `$ResolvedUrl
+            }
+            Stop-StartupTranscript
+            exit 0
+        }
+    } catch {
+    }
+    throw "Port `$ResolvedPort is already in use. Change PORT in .env, for example PORT=8001, then rerun start-windows.ps1."
+}
 
 if (-not `$NoBrowser) {
     Start-Job -ScriptBlock {
@@ -1064,16 +1743,39 @@ if (-not `$NoBrowser) {
             }
             Start-Sleep -Seconds 1
         }
-    } -ArgumentList `$Url | Out-Null
+    } -ArgumentList `$ResolvedUrl | Out-Null
 }
 
-& `$Python "main.py"
+`$oldErrorActionPreference = `$ErrorActionPreference
+try {
+    `$ErrorActionPreference = "Continue"
+    & `$Python "main.py" 2>&1 | ForEach-Object { Write-Host `$_ }
+    `$serverExitCode = `$LASTEXITCODE
+} finally {
+    `$ErrorActionPreference = `$oldErrorActionPreference
+}
+if (`$serverExitCode -ne 0) {
+    throw "Server exited with code `$serverExitCode"
+}
+Stop-StartupTranscript
+exit 0
 "@
     Set-Content -LiteralPath "start-windows.ps1" -Value $launcher -Encoding UTF8
 }
 
 function Verify-RocmPyTorch($Python) {
-    $code = "import torch; print('torch=', torch.__version__); print('hip=', torch.version.hip); print('gpu_available=', torch.cuda.is_available()); print('device=', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"
+    Set-NumericRuntimeThreadEnv
+    $code = @"
+import os
+for key in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS', 'BLIS_NUM_THREADS', 'GOTO_NUM_THREADS', 'OPENBLAS_MAIN_FREE'):
+    os.environ.setdefault(key, '1')
+import torch
+print('torch=', torch.__version__)
+print('hip=', torch.version.hip)
+print('gpu_available=', torch.cuda.is_available())
+print('device=', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')
+raise SystemExit(0 if torch.version.hip else 1)
+"@
     Invoke-External $Python @("-c", $code) "ROCm PyTorch verification failed"
 }
 
@@ -1082,6 +1784,8 @@ try {
     $ProjectRoot = Resolve-ProjectRoot
     Set-Location $ProjectRoot
     Initialize-InstallLog
+    Set-NumericRuntimeThreadEnv
+    Initialize-LocalCacheDirectories
     Resolve-InstallerMirrors
     if ($PrintRocmUrls) {
         Show-RocmDownloadPlan
@@ -1091,21 +1795,24 @@ try {
     Write-Step "Checking AMD GPU"
     Assert-AMDGraphics $SkipGpuCheck
 
-    Write-Step "Checking Python 3.12"
+    Write-Step "Preparing isolated Python 3.12 runtime"
     $PythonExe = Find-Python312 $PythonExe
     Assert-Python312 $PythonExe
 
     Write-Step "Creating isolated ROCm virtual environment"
-    $VenvPython = Create-Or-RecreateVenv $PythonExe $VenvPath $RecreateVenv
+    if (-not $RecreateVenv) {
+        Write-Host "AMD installer recreates the project virtual environment by default: $VenvPath"
+    }
+    $VenvPython = Create-Or-RecreateVenv $PythonExe $VenvPath $true
     Invoke-PipInstallWithMirrors $VenvPython @("install", "-U", "pip", "wheel", "setuptools") "Failed to update pip tooling"
 
     Write-Step "Installing AMD ROCm runtime"
-    Install-ArtifactGroup $VenvPython $RocmRuntimeArtifacts $WheelCache "AMD ROCm runtime $RocmVersion" $ForceRocmRuntime {
+    Install-ArtifactGroup $VenvPython $RocmRuntimeArtifacts $script:ResolvedWheelCache "AMD ROCm runtime $RocmVersion" $ForceRocmRuntime {
         Test-PackagesInstalled $VenvPython $RocmRuntimeArtifacts
     }
 
     Write-Step "Installing AMD ROCm PyTorch"
-    Install-ArtifactGroup $VenvPython $TorchArtifacts $WheelCache "AMD ROCm PyTorch $TorchVersion" $ForceTorch {
+    Install-ArtifactGroup $VenvPython $TorchArtifacts $script:ResolvedWheelCache "AMD ROCm PyTorch $TorchVersion" $ForceTorch {
         Test-RocmTorchReady $VenvPython
     }
 
@@ -1114,6 +1821,9 @@ try {
 
     Write-Step "Installing project dependencies"
     Install-ProjectDeps $VenvPython $ForceDeps
+
+    Write-Step "Installing face recognition runtime"
+    Install-FaceDeps $VenvPython
 
     Write-Step "Configuring .env for AMD GPU ASR"
     Ensure-EnvConfig

@@ -16,7 +16,7 @@
 必须安装：
 
 1. Windows 10/11 x64。
-2. Python 3.12 x64。安装时勾选 `Add Python to PATH`，否则用 `-PythonExe` 指定路径。
+2. Python 运行时。CPU/NVIDIA/AMD 三个安装版本都只使用项目内 `.runtime\python-3.12`；没有时用 `offline\python\python.3.12.x.nupkg` 解压到项目内，不扫描主机 Python、不修改系统 PATH。
 3. Node.js LTS，用于构建前端。
 4. FFmpeg。新开 PowerShell 后执行 `ffmpeg -version` 能正常输出。
 5. 显卡驱动。NVIDIA 用 `nvidia-smi` 验证；AMD 按下文安装指定 Adrenalin/PRO 驱动。
@@ -40,7 +40,7 @@
 | 前端 npm 依赖 | `https://registry.npmmirror.com/` | `https://registry.npmjs.org/` |
 | Hugging Face 模型 | `https://hf-mirror.com` | `MirrorMode=Official` 时不设置 |
 | ModelScope 模型 | `https://modelscope.cn` | 无需额外设置 |
-| NVIDIA PyTorch CUDA wheel | 阿里 `https://mirrors.aliyun.com/pytorch-wheels/<cu版本>`，依赖解析走清华 PyPI | `https://download.pytorch.org/whl/<cu版本>` |
+| NVIDIA PyTorch CUDA wheel | 南京大学 `https://mirror.nju.edu.cn/pytorch/whl/<cu版本>`、阿里 `https://mirrors.aliyun.com/pytorch-wheels/<cu版本>`、上海交大 `https://mirror.sjtu.edu.cn/pytorch-wheels/<cu版本>`，依赖解析走清华 PyPI | `https://download.pytorch.org/whl/<cu版本>` |
 | AMD ROCm Windows wheel | 暂无已验证公开国内源 | `https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1` |
 
 ## 获取代码或 zip
@@ -100,7 +100,9 @@ dist-packages\matrix-live-diarizer-windows-amd-api.zip
 默认用 `cu128`，因为它在兼容性和新模型性能之间比较均衡。脚本在 `MirrorMode=China` 时会优先使用阿里 PyTorch wheel 文件镜像，普通依赖解析继续走清华 PyPI：
 
 ```text
+https://mirror.nju.edu.cn/pytorch/whl/<cu版本>
 https://mirrors.aliyun.com/pytorch-wheels/<cu版本>
+https://mirror.sjtu.edu.cn/pytorch-wheels/<cu版本>
 ```
 
 如果镜像失败，再回退到 PyTorch 官方源：
@@ -113,13 +115,15 @@ https://download.pytorch.org/whl/<cu版本>
 
 默认 `MirrorMode=China` 会固定使用项目内置国内源优先顺序，不读取系统里残留的 `PIP_INDEX_URL`、`NPM_CONFIG_REGISTRY`、`HF_ENDPOINT`、`TORCH_FIND_LINKS`、`TORCH_INDEX_URLS`。如果确实要用环境变量，传 `-MirrorMode Auto`。
 
-PyTorch 组合默认是 `-TorchBuild auto`：
+wheel 文件名里的 `win_amd64` 表示 Windows x64 CPU/Python ABI，和 AMD GPU 没关系。Intel x64 CPU、AMD x64 CPU 上的 NVIDIA CUDA 包都会显示 `win_amd64`。
+
+PyTorch 组合默认是 `-TorchBuild stable`，避免先下载最新 wheel 后再因 Windows DLL/驱动兼容问题回退：
 
 | 参数 | torch | torchaudio | torchvision | 用途 |
 | --- | --- | --- | --- | --- |
-| `auto` | 先试 `latest`，失败后自动试 `stable` | 同左 | 同左 | 默认，适合一键安装 |
+| `stable` | `cu126/cu128`: `2.8.0`；`cu130`: `2.9.0` | 同 torch | `cu126/cu128`: `0.23.0`；`cu130`: `0.24.0` | 默认，规避 Windows `c10.dll` / DLL 初始化失败 |
+| `auto` | 先试 `latest`，失败后自动试 `stable` | 同左 | 同左 | 只建议调试时使用，可能下载两套大 wheel |
 | `latest` | `2.11.0` | `2.11.0` | `0.26.0` | 新驱动、新显卡优先 |
-| `stable` | `cu126/cu128`: `2.8.0`；`cu130`: `2.9.0` | 同 torch | `cu126/cu128`: `0.23.0`；`cu130`: `0.24.0` | 规避 Windows `c10.dll` / DLL 初始化失败 |
 
 ### 一键安装
 
@@ -129,17 +133,15 @@ PyTorch 组合默认是 `-TorchBuild auto`：
 .\install-windows-nvidia-gpu.cmd
 ```
 
-等价于：
+NVIDIA 安装也不使用主机 Python。包内必须有 `offline\python\python.3.12.x.nupkg`，脚本会解压到 `.runtime\python-3.12`。
 
-```powershell
-.\install-windows.cmd -Profile NvidiaCuda
+NVIDIA PyTorch 大 wheel 会先下载到项目缓存，再从本地安装：
+
+```text
+.download-cache\nvidia-wheels\<cu版本>
 ```
 
-指定 Python 3.12：
-
-```powershell
-.\install-windows-nvidia-gpu.cmd -PythonExe "C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe"
-```
+如果中途断网或 `IncompleteRead`，重新运行同一条安装命令即可续传或复用已经完整下载的 wheel，不会因为小依赖失败而重新下载 2GB 到 4GB 的 torch 文件。
 
 切换 CUDA wheel：
 
@@ -235,9 +237,9 @@ Ryzen AI APU：
 
 ### AMD 驱动和 Python 要求
 
-AMD Windows ROCm PyTorch 7.2.1 要求：
+AMD Windows ROCm PyTorch 7.2.1 对安装器选中的运行时有要求：
 
-- Python 3.12。
+- Python 3.12 x64。可以是项目本地 `.runtime\python-3.12`，不要求主机 PATH 的 `python` 是 3.12。
 - AMD 26.2.2 图形驱动。
 - 官方 ROCm 7.2.1 Windows wheel。
 
@@ -251,23 +253,20 @@ AMD Windows ROCm PyTorch 7.2.1 要求：
 .\install-windows-amd-gpu.cmd
 ```
 
-等价于：
+AMD 不使用主机 Python。包内必须有可解压 Python 运行时：
 
-```powershell
-.\install-windows.cmd -Profile AmdRocm
+```text
+offline\python\python.3.12.x.nupkg
 ```
 
-指定 Python 3.12：
-
-```powershell
-.\install-windows-amd-gpu.cmd -PythonExe "C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe"
-```
+脚本会把它解压到项目相对目录 `.runtime\python-3.12`，不会写入系统 PATH，也不会扫描 Anaconda、`py -3.12` 或 `PATH`。
 
 重建环境：
 
 ```powershell
-.\install-windows-amd-gpu.cmd -RecreateVenv
+.\install-windows-amd-gpu.cmd
 ```
+AMD 安装会默认重建 `.venv-rocm-win`。
 
 强制重装 ROCm PyTorch：
 
@@ -289,13 +288,13 @@ http://127.0.0.1:8000
 
 ### AMD 下载加速和断点续传
 
-ROCm Windows wheel 体积很大，目前没有已验证可用的公开国内镜像。脚本默认会复用：
+ROCm Windows wheel 体积很大，目前没有已验证可用的公开国内镜像。AMD 一键包应内置下面的缓存目录，安装器默认会优先复用：
 
 ```text
 .download-cache\rocm-win-7.2.1
 ```
 
-如果下载中断，直接重新执行同一条安装命令即可。
+如果缓存完整，安装过程不会重新下载 ROCm 7.2.1。缓存缺失时，如果允许在线下载，直接重新执行同一条安装命令即可断点续传；如果传入 `-OfflineOnly`，缺文件会立即失败。
 
 安装 aria2，多线程断点续传：
 
@@ -328,6 +327,14 @@ ROCm Windows wheel 体积很大，目前没有已验证可用的公开国内镜�
 ```
 
 把打印出的 wheel/tar.gz 放到 `.download-cache\rocm-win-7.2.1`，再重新运行安装命令。
+
+制作要求内置 ROCm 缓存的 AMD 一键包：
+
+```powershell
+.\package-windows.cmd -PackageName matrix-live-diarizer-windows-amd-api -Profile AmdRocm
+```
+
+需要 VPN 或外网下载的 Python wheel 可放到 `offline\wheels`；安装器会优先从该目录解析，再走清华/阿里 PyPI。
 
 使用公司内网、NAS、Nginx 或对象存储自建镜像：
 
@@ -403,11 +410,12 @@ config\model-settings.json
 .\install-windows.cmd -ForceDeps
 ```
 
-删除并重建虚拟环境：
+虚拟环境默认会删除并重建。需要重新安装 Python 依赖或 PyTorch 时使用：
 
 ```powershell
-.\install-windows-nvidia-gpu.cmd -RecreateVenv
-.\install-windows-amd-gpu.cmd -RecreateVenv
+.\install-windows.cmd -ForceDeps
+.\install-windows-nvidia-gpu.cmd -ForceTorch
+.\install-windows-amd-gpu.cmd -ForceTorch
 ```
 
 不自动打开浏览器：
@@ -434,9 +442,14 @@ config\model-settings.json
 指定文件名：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1 -PackageName matrix-live-diarizer-windows-nvidia-api
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1 -PackageName matrix-live-diarizer-windows-amd-api
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1 -PackageName matrix-live-diarizer-windows-cpu -Profile Cpu
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1 -PackageName matrix-live-diarizer-windows-nvidia-api -Profile NvidiaCuda
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1 -PackageName matrix-live-diarizer-windows-amd-api -Profile AmdRocm
 ```
+
+三个包都会带 `offline\python\python.3.12.x.nupkg`，目标机器安装时再解压到项目内 `.runtime\python-3.12`；不会把打包机上的 `.runtime` 目录打进 zip。
+
+AMD ROCm 包会要求 `.download-cache\rocm-win-7.2.1` 下的 ROCm 7.2.1 runtime/PyTorch 文件完整存在，并把它们内置进 zip；缺失时打包失败并列出文件名。
 
 压缩包会排除：
 
@@ -447,7 +460,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-windows.ps
 - `models`
 - `data`
 - `logs`
-- `.download-cache`
+- `.download-cache`，但 `-Profile AmdRocm` 的 AMD 包会包含 `.download-cache\rocm-win-7.2.1`
 
 新电脑解压后重新运行对应一键安装脚本即可。
 

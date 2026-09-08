@@ -118,11 +118,13 @@ export interface ModelConfigResponse {
   asr: Partial<AsrSettings>
   speaker: Partial<SpeakerSettings>
   diarization?: Record<string, unknown>
+  face?: Record<string, unknown>
   llm?: Record<string, unknown>
   supported?: {
     asr?: Record<string, AsrInfo>
     speaker?: Record<string, EngineInfo>
     diarization?: Record<string, unknown>
+    face?: Record<string, unknown>
     llm_providers?: Array<{ key: string; label: string; endpoint: string }>
   }
 }
@@ -168,7 +170,7 @@ export interface AsrTestResponse {
 
 export interface ModelSourceTestResponse {
   ok: boolean
-  section: 'asr' | 'speaker' | 'diarization'
+  section: 'asr' | 'speaker' | 'diarization' | 'face'
   provider: string
   endpoint: string
   probe_url?: string
@@ -246,7 +248,7 @@ export async function getModelConfig() {
 }
 
 export async function testModelSource(payload: {
-  section: 'asr' | 'speaker' | 'diarization'
+  section: 'asr' | 'speaker' | 'diarization' | 'face'
   provider?: string
   endpoint?: string | null
   api_key?: string | null

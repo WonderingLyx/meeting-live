@@ -287,24 +287,50 @@ def _funasr_modelscope_cache() -> str:
     return cache
 
 
+def _funasr_diarization_uses_paraformer(info: dict[str, Any]) -> bool:
+    model = str(info.get("funasr_model") or "").strip().lower()
+    engine_type = str(info.get("type") or "").strip().lower()
+    return "paraformer" in model or "paraformer" in engine_type
+
+
+def _funasr_diarization_disabled_reason(info: dict[str, Any]) -> str | None:
+    if not _funasr_diarization_uses_paraformer(info):
+        return None
+    try:
+        from engine.asr.funasr_engine import rocm_windows_funasr_disabled_reason
+
+        return rocm_windows_funasr_disabled_reason("paraformer_full")
+    except Exception:
+        return None
+
+
 def _dependency_state(info: dict[str, Any]) -> dict[str, Any]:
     dependency = str(info.get("dependency") or "")
+    reason = ""
     if dependency == "pyannote.audio":
         available = _module_available("pyannote") and _module_available("pyannote.audio")
         hint = "pip install pyannote.audio"
     elif dependency == "funasr":
         available = _module_available("funasr")
         hint = "pip install funasr modelscope"
+        if available:
+            reason = _funasr_diarization_disabled_reason(info) or ""
+            if reason:
+                available = False
+                hint = "重新运行一键安装，或安装 funasr==1.4.1；也可以切换 SenseVoice/pyannote/sherpa 分离引擎。"
     elif dependency == "external_command":
         available = bool(_diarization_command())
         hint = "在设置页填写 command，或设置 DIARIZATION_COMMAND；命令输出 JSON/RTTM。"
     else:
         available = True
         hint = ""
-    return {
+    state = {
         "dependency_available": available,
         "install_hint": "" if available else hint,
     }
+    if reason:
+        state["reason"] = reason
+    return state
 
 
 def get_diarization_engine_info(engine_type: str | None = None) -> dict[str, Any]:
@@ -738,6 +764,13 @@ class FunASRCampPlusDiarizer:
         if self._model is not None:
             return
         self._last_error = None
+        disabled_reason = _funasr_diarization_disabled_reason(self.info)
+        if disabled_reason:
+            self._enabled = False
+            self._last_error = disabled_reason
+            self._record_state()
+            logger.warning("[DIARIZATION:%s] %s", self.engine_type, self._last_error)
+            return
         try:
             from funasr import AutoModel
         except Exception as exc:

@@ -30,6 +30,13 @@ router = APIRouter()
 LLM_PROMPT_KEY_PREFIX = "llm.prompt."
 
 
+def _clean_secret(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text or text.startswith("#") or text.startswith("＃"):
+        return None
+    return text
+
+
 def _load_prompts(settings_repo) -> dict:
     """从 settings_repo 加载用户自定义 prompt,缺失的用 DEFAULT_PROMPTS 补。
 
@@ -157,7 +164,7 @@ def _effective_llm_cfg(repo=None) -> tuple[LLMConfig, str, Optional[str]]:
         except ValueError:
             llm_settings = {}
         provider = llm_settings.get("provider") or provider
-        file_api_key = (llm_settings.get("api_key") or "").strip() or None
+        file_api_key = _clean_secret(llm_settings.get("api_key"))
         cfg = replace(
             cfg,
             enabled=_to_bool(llm_settings.get("enabled"), cfg.enabled),
@@ -234,7 +241,7 @@ class LLMSettingsRequest(BaseModel):
     model: str = Field(..., min_length=1, max_length=200)
     api_key: Optional[str] = Field(None, max_length=500)
     allow_public: bool = False
-    timeout_sec: int = Field(60, ge=1, le=600)
+    timeout_sec: int = Field(200, ge=1, le=600)
     max_input_tokens: int = Field(8000, ge=500, le=200000)
     mock: bool = False
 

@@ -217,6 +217,42 @@ def test_funasr_builtin_variants_load_expected_automodel(monkeypatch):
     assert calls[3]["spk_model"] == "cam++"
 
 
+def test_funasr_rocm_cuda_defaults_to_cpu(monkeypatch):
+    fake_torch = types.SimpleNamespace(
+        version=types.SimpleNamespace(hip="7.2.1"),
+        cuda=types.SimpleNamespace(is_available=lambda: True),
+        backends=types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: False)
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.delenv("ASR_FUNASR_ALLOW_ROCM_GPU", raising=False)
+
+    from engine.asr import funasr_engine
+    from engine.asr.funasr_engine import FunASREngine
+
+    funasr_engine._ROCM_FUNASR_WARNING_EMITTED = False
+    assert FunASREngine._resolve_device("auto") == "cpu"
+    assert FunASREngine._resolve_device("cuda") == "cpu"
+
+
+def test_funasr_rocm_cuda_can_be_forced(monkeypatch):
+    fake_torch = types.SimpleNamespace(
+        version=types.SimpleNamespace(hip="7.2.1"),
+        cuda=types.SimpleNamespace(is_available=lambda: True),
+        backends=types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: False)
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setenv("ASR_FUNASR_ALLOW_ROCM_GPU", "true")
+
+    from engine.asr.funasr_engine import FunASREngine
+
+    assert FunASREngine._resolve_device("auto") == "cuda:0"
+    assert FunASREngine._resolve_device("cuda") == "cuda:0"
+
+
 def test_asr_engine_capabilities_can_be_overridden(monkeypatch):
     monkeypatch.setenv(
         "ASR_CAPABILITIES_JSON",
@@ -246,6 +282,31 @@ def test_empty_asr_capabilities_file_is_ignored(monkeypatch, tmp_path, caplog):
     assert "ASR capabilities JSON" not in caplog.text
 
 
+def test_comment_asr_capabilities_env_is_ignored(monkeypatch, caplog):
+    from engine.asr import factory
+
+    monkeypatch.setenv("ASR_CAPABILITIES_JSON", "# optional override")
+
+    with caplog.at_level("WARNING", logger="ASR_Engine"):
+        assert factory.get_asr_engine_info("qwen3")["customized"] is False
+        assert factory.get_asr_engine_info("sensevoice_zh")["customized"] is False
+
+    assert "ASR capabilities JSON" not in caplog.text
+
+
+def test_asr_capabilities_file_accepts_utf8_bom(monkeypatch, tmp_path):
+    from engine.asr import factory
+
+    config_path = tmp_path / "asr-capabilities.json"
+    config_path.write_bytes(
+        b"\xef\xbb\xbf"
+        + json.dumps({"qwen3": {"capabilities": {"word_timestamps": False}}}).encode("utf-8")
+    )
+    monkeypatch.setenv("ASR_CAPABILITIES_FILE", str(config_path))
+
+    assert factory.get_asr_engine_info("qwen3")["capabilities"]["word_timestamps"] is False
+
+
 def test_invalid_asr_capabilities_warns_once(monkeypatch, caplog):
     from engine.asr import factory
 
@@ -258,11 +319,79 @@ def test_invalid_asr_capabilities_warns_once(monkeypatch, caplog):
     assert caplog.text.count("ASR capabilities JSON") == 1
 
 
+def test_windows_rocm_paraformer_is_unavailable_by_default(monkeypatch):
+    from engine.asr import factory
+    from engine.asr import funasr_engine
+
+    fake_torch = types.SimpleNamespace(
+        version=types.SimpleNamespace(hip="7.2.1"),
+        cuda=types.SimpleNamespace(is_available=lambda: True),
+        backends=types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: False)
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("ASR_FUNASR_ALLOW_ROCM_PARAFORMER", raising=False)
+    monkeypatch.setattr(funasr_engine, "_installed_funasr_version", lambda: "1.4.13")
+    monkeypatch.setattr(factory.importlib.util, "find_spec", lambda _name: object())
+
+    info = factory.get_asr_engine_info("paraformer_full")
+
+    assert info["available"] is False
+    assert "0xC0000005" in info["reason"]
+    assert "funasr=1.4.13" in info["reason"]
+
+
+def test_windows_rocm_paraformer_allows_known_stable_funasr(monkeypatch):
+    from engine.asr import factory
+    from engine.asr import funasr_engine
+
+    fake_torch = types.SimpleNamespace(
+        version=types.SimpleNamespace(hip="7.2.1"),
+        cuda=types.SimpleNamespace(is_available=lambda: True),
+        backends=types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: False)
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("ASR_FUNASR_ALLOW_ROCM_PARAFORMER", raising=False)
+    monkeypatch.setattr(funasr_engine, "_installed_funasr_version", lambda: "1.4.1")
+    monkeypatch.setattr(factory.importlib.util, "find_spec", lambda _name: object())
+
+    info = factory.get_asr_engine_info("paraformer_full")
+
+    assert info["available"] is True
+
+
+def test_windows_rocm_paraformer_guard_raises_before_loading(monkeypatch):
+    fake_torch = types.SimpleNamespace(
+        version=types.SimpleNamespace(hip="7.2.1"),
+        cuda=types.SimpleNamespace(is_available=lambda: True),
+        backends=types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: False)
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("ASR_FUNASR_ALLOW_ROCM_PARAFORMER", raising=False)
+
+    from engine.asr import funasr_engine
+    from engine.asr.funasr_engine import FunASREngine
+
+    monkeypatch.setattr(funasr_engine, "_installed_funasr_version", lambda: "1.4.13")
+    FunASREngine._instances.clear()
+    with pytest.raises(RuntimeError, match="0xC0000005"):
+        FunASREngine("paraformer_full")
+
+
 def test_asr_manager_switch_success_after_load(monkeypatch):
     from engine.asr import factory
 
     factory.ASREngineManager.reset()
     monkeypatch.setenv("ASR_ENGINE", "qwen3")
+    monkeypatch.setenv("ASR_STARTUP_ALLOW_DOWNLOAD", "true")
     engines = {"qwen3": object(), "sensevoice": object()}
 
     def fake_load(engine_type=None):
@@ -287,6 +416,7 @@ def test_asr_manager_switch_failure_keeps_current(monkeypatch):
 
     factory.ASREngineManager.reset()
     monkeypatch.setenv("ASR_ENGINE", "qwen3")
+    monkeypatch.setenv("ASR_STARTUP_ALLOW_DOWNLOAD", "true")
     current = object()
 
     def fake_load(engine_type=None):
@@ -330,6 +460,7 @@ def test_asr_manager_switch_missing_dependency_does_not_load(monkeypatch):
 
     factory.ASREngineManager.reset()
     monkeypatch.setenv("ASR_ENGINE", "qwen3")
+    monkeypatch.setenv("ASR_STARTUP_ALLOW_DOWNLOAD", "true")
     current = object()
 
     def fake_find_spec(name):
@@ -351,3 +482,58 @@ def test_asr_manager_switch_missing_dependency_does_not_load(monkeypatch):
     assert result["dependency"] == "funasr"
     assert manager.current_type == "qwen3"
     assert manager.get_engine() is current
+
+
+def test_asr_manager_startup_skips_uncached_qwen_and_falls_back(monkeypatch):
+    from engine.asr import factory
+
+    factory.ASREngineManager.reset()
+    monkeypatch.setenv("ASR_ENGINE", "qwen3")
+    monkeypatch.delenv("ASR_STARTUP_ALLOW_DOWNLOAD", raising=False)
+    monkeypatch.setenv("ASR_STARTUP_FALLBACKS", "sensevoice_zh,paraformer")
+    monkeypatch.setattr(factory, "_managed_model_ready", lambda _category, _name: False)
+    monkeypatch.setattr(factory.importlib.util, "find_spec", lambda _name: object())
+
+    fallback = object()
+    calls = []
+
+    def fake_load(engine_type=None):
+        calls.append(engine_type)
+        if engine_type == "qwen3":
+            raise AssertionError("startup should not trigger qwen download")
+        if engine_type == "sensevoice_zh":
+            return fallback
+        raise RuntimeError(f"unexpected ASR engine: {engine_type}")
+
+    monkeypatch.setattr(factory, "get_asr_engine", fake_load)
+
+    manager = factory.get_asr_manager()
+    assert manager.get_engine() is fallback
+    assert calls == ["sensevoice_zh"]
+    assert manager.current_type == "sensevoice_zh"
+
+
+def test_asr_manager_startup_falls_back_after_primary_failure(monkeypatch):
+    from engine.asr import factory
+
+    factory.ASREngineManager.reset()
+    monkeypatch.setenv("ASR_ENGINE", "qwen3")
+    monkeypatch.setenv("ASR_STARTUP_ALLOW_DOWNLOAD", "true")
+    monkeypatch.setenv("ASR_STARTUP_FALLBACKS", "sensevoice_zh")
+    monkeypatch.setattr(factory.importlib.util, "find_spec", lambda _name: object())
+
+    fallback = object()
+    calls = []
+
+    def fake_load(engine_type=None):
+        calls.append(engine_type)
+        if engine_type == "qwen3":
+            raise RuntimeError("hf unavailable")
+        return fallback
+
+    monkeypatch.setattr(factory, "get_asr_engine", fake_load)
+
+    manager = factory.get_asr_manager()
+    assert manager.get_engine() is fallback
+    assert calls == ["qwen3", "sensevoice_zh"]
+    assert manager.current_type == "sensevoice_zh"

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.api.jobs import router as jobs_router
 from app.api.meetings import router as meetings_router
+from app.api.face import router as face_router
 from app.api.people import router as people_router
 from app.repositories.database import Database
 from app.repositories.jobs import JobRepository
@@ -27,6 +28,7 @@ def make_client(tmp_path):
     app.include_router(meetings_router)
     app.include_router(jobs_router)
     app.include_router(people_router)
+    app.include_router(face_router)
     return TestClient(app), app
 
 
@@ -34,6 +36,27 @@ def valid_wav_bytes() -> bytes:
     output = io.BytesIO()
     sf.write(output, np.zeros(16000, dtype=np.float32), 16000, format="WAV")
     return output.getvalue()
+
+
+def test_manual_attendance_api_is_available(tmp_path):
+    client, app = make_client(tmp_path)
+    meeting_id = app.state.meeting_repo.create(source="live", title="签到会议")
+    person_id = app.state.people_repo.create("李四")
+
+    marked = client.post(
+        f"/v1/meetings/{meeting_id}/attendance/manual",
+        json={"person_id": person_id, "present": True},
+    )
+    assert marked.status_code == 200
+    assert marked.json()["item"]["person_name"] == "李四"
+
+    attendance = client.get(f"/v1/meetings/{meeting_id}/attendance")
+    assert attendance.status_code == 200
+    assert attendance.json()["items"][0]["source"] == "manual"
+
+    person = client.get(f"/v1/people/{person_id}")
+    assert person.status_code == 200
+    assert person.json()["face_samples"] == []
 
 
 def test_meeting_correction_journey(tmp_path):

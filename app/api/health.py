@@ -12,6 +12,13 @@ logger = logging.getLogger("Matrix_Core")
 
 router = APIRouter()
 
+
+def _runtime_engine_configured(engine: object | None) -> bool:
+    if engine is None:
+        return False
+    last_error = getattr(engine, "last_error", None)
+    return not (isinstance(last_error, str) and last_error)
+
 @router.get("/health")
 async def health_check():
     """健康检查端点 - 用于负载均衡器和监控"""
@@ -32,9 +39,11 @@ def readiness_check(request: Request):
     database = getattr(request.app.state, "db", None)
     app_config = getattr(request.app.state, "config", None)
     media_dir = app_config.storage.media_dir if app_config is not None else None
+    asr_engine = runtime.asr if runtime is not None else None
+    speaker_engine = runtime.speaker if runtime is not None else None
     checks = {
-        "asr": runtime is not None and runtime.asr is not None,
-        "speaker": runtime is not None and runtime.speaker is not None,
+        "asr": _runtime_engine_configured(asr_engine),
+        "speaker": _runtime_engine_configured(speaker_engine),
         "speaker_db": False,
         "inference_slot": not getattr(runtime, "slot_leaked", False),
         "database": False,
@@ -51,7 +60,7 @@ def readiness_check(request: Request):
     # 声纹向量库探活:ChromaDB 或内置内存向量库都实现 count()。
     if checks["speaker"]:
         try:
-            coll = getattr(runtime.speaker, "collection", None)
+            coll = getattr(speaker_engine, "collection", None)
             if coll is not None:
                 coll.count()
             checks["speaker_db"] = True

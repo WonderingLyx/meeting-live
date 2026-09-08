@@ -1,6 +1,11 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 set "ROOT=%~dp0"
+echo %* | findstr /I /C:"-Profile" >nul
+if "%ERRORLEVEL%"=="0" (
+  echo install-windows-nvidia-gpu.cmd always installs the NVIDIA CUDA profile. Do not pass -Profile.
+  exit /b 2
+)
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\install-windows.ps1" -Profile NvidiaCuda %*
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (

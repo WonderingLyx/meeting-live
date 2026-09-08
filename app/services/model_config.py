@@ -36,18 +36,25 @@ MODEL_SOURCE_PROVIDERS = [
         "scope": "asr,speaker,diarization",
     },
     {
+        "key": "insightface",
+        "label": "InsightFace",
+        "endpoint": "file://./models/face/insightface",
+        "token_env": "FACE_API_KEY",
+        "scope": "face",
+    },
+    {
         "key": "local",
         "label": "Local cache/path",
         "endpoint": "file://./models",
         "token_env": "",
-        "scope": "asr,speaker,diarization",
+        "scope": "asr,speaker,diarization,face",
     },
     {
         "key": "custom",
         "label": "Custom",
         "endpoint": "",
         "token_env": "",
-        "scope": "asr,speaker,diarization",
+        "scope": "asr,speaker,diarization,face",
     },
 ]
 
@@ -103,6 +110,17 @@ def default_model_settings() -> dict[str, Any]:
             ),
             "device": config.speaker.diarization_device,
         },
+        "face": {
+            "provider": os.environ.get("FACE_PROVIDER", "insightface"),
+            "endpoint": os.environ.get("FACE_ENDPOINT", "file://./models/face/insightface"),
+            "api_key": "",
+            "model": config.face.model,
+            "device": config.face.device,
+            "enabled": bool(config.face.enabled),
+            "match_threshold": float(config.face.match_threshold),
+            "match_margin": float(config.face.match_margin),
+            "frame_interval_sec": int(config.face.frame_interval_sec),
+        },
         "llm": {
             "provider": os.environ.get("LLM_PROVIDER", "ollama"),
             "endpoint": config.llm.endpoint,
@@ -132,7 +150,7 @@ def read_raw_model_settings() -> dict[str, Any]:
     if not path.is_file():
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"无法读取模型配置文件 {path}: {exc}") from exc
     if not isinstance(payload, dict):
@@ -151,30 +169,32 @@ def _read_raw_or_empty() -> dict[str, Any]:
 def _env_secret_for(section: str, provider: str) -> str:
     provider = (provider or "").strip().lower()
     if section == "llm":
-        return os.environ.get("LLM_API_KEY", "")
+        return _clean_secret(os.environ.get("LLM_API_KEY", ""))
+    if section == "face":
+        return _clean_secret(os.environ.get("FACE_API_KEY", ""))
     if provider == "huggingface":
-        return (
+        return _clean_secret(
             os.environ.get("HF_TOKEN")
             or os.environ.get("HUGGINGFACE_TOKEN")
             or os.environ.get("HUGGINGFACE_HUB_TOKEN")
             or ""
         )
     if provider == "modelscope" or section in {"asr", "speaker"}:
-        return (
+        return _clean_secret(
             os.environ.get(f"{section.upper()}_API_KEY")
             or os.environ.get("MODELSCOPE_API_TOKEN")
             or os.environ.get("MODELSCOPE_TOKEN")
             or ""
         )
     if section == "diarization":
-        return os.environ.get("DIARIZATION_API_KEY", "")
+        return _clean_secret(os.environ.get("DIARIZATION_API_KEY", ""))
     return ""
 
 
 def read_model_settings(*, include_env_secrets: bool = False) -> dict[str, Any]:
     settings = _deep_merge(default_model_settings(), _read_raw_or_empty())
     if include_env_secrets:
-        for section_name in ("asr", "speaker", "diarization", "llm"):
+        for section_name in ("asr", "speaker", "diarization", "face", "llm"):
             section = settings.get(section_name)
             if not isinstance(section, dict):
                 continue
@@ -192,6 +212,13 @@ def _trimmed(value: Any, default: str = "") -> str:
     if value is None:
         return default
     return str(value).strip()
+
+
+def _clean_secret(value: Any, default: str = "") -> str:
+    text = _trimmed(value, default)
+    if text.startswith("#") or text.startswith("＃"):
+        return ""
+    return text
 
 
 def _to_bool(value: Any, default: bool = False) -> bool:
@@ -217,9 +244,9 @@ def public_model_settings() -> dict[str, Any]:
         "config_path": str(model_settings_path()),
         "providers": MODEL_SOURCE_PROVIDERS,
     }
-    for section_name in ("asr", "speaker", "diarization", "llm"):
+    for section_name in ("asr", "speaker", "diarization", "face", "llm"):
         section = dict(settings.get(section_name) or {})
-        api_key = _trimmed(section.pop("api_key", ""))
+        api_key = _clean_secret(section.pop("api_key", ""))
         section["api_key_configured"] = bool(api_key)
         section["api_key_preview"] = _mask_secret(api_key)
         section["config_source"] = "model-settings" if isinstance(raw.get(section_name), dict) else "env"
@@ -233,7 +260,7 @@ def update_model_section(
     *,
     clear_api_key: bool = False,
 ) -> dict[str, Any]:
-    if section not in {"asr", "speaker", "diarization", "llm"}:
+    if section not in {"asr", "speaker", "diarization", "face", "llm"}:
         raise ValueError(f"unsupported model settings section: {section}")
 
     raw = _read_raw_or_empty()
@@ -255,7 +282,7 @@ def update_model_section(
     if clear_api_key:
         merged["api_key"] = ""
     elif incoming_key is not None:
-        candidate = _trimmed(incoming_key)
+        candidate = _clean_secret(incoming_key)
         if candidate:
             merged["api_key"] = candidate
 
@@ -282,7 +309,7 @@ def _set_env_if_value(key: str, value: Any) -> None:
 def _set_provider_environment(section_name: str, section: Mapping[str, Any]) -> None:
     provider = _trimmed(section.get("provider")).lower()
     endpoint = _trimmed(section.get("endpoint")).rstrip("/")
-    api_key = _trimmed(section.get("api_key"))
+    api_key = _clean_secret(section.get("api_key"))
     if endpoint:
         os.environ[f"{section_name.upper()}_ENDPOINT"] = endpoint
     if api_key:
@@ -318,6 +345,7 @@ def apply_model_settings_to_runtime(settings: Mapping[str, Any] | None = None) -
         else {}
     )
     llm = effective.get("llm") if isinstance(effective.get("llm"), Mapping) else {}
+    face = effective.get("face") if isinstance(effective.get("face"), Mapping) else {}
 
     if asr:
         _set_provider_environment("asr", asr)
@@ -364,13 +392,49 @@ def apply_model_settings_to_runtime(settings: Mapping[str, Any] | None = None) -
             config.speaker.diarization_device = device
             os.environ["PYANNOTE_DEVICE"] = device
 
+    if face:
+        _set_provider_environment("face", face)
+        provider = _trimmed(face.get("provider"), config.face.provider).lower()
+        model = _trimmed(face.get("model"), config.face.model)
+        device = _trimmed(face.get("device"), config.face.device).lower()
+        if provider:
+            config.face.provider = provider
+            os.environ["FACE_PROVIDER"] = provider
+        if model:
+            config.face.model = model
+            os.environ["FACE_MODEL"] = model
+        if device:
+            config.face.device = device
+            os.environ["FACE_DEVICE"] = device
+        if "enabled" in face:
+            config.face.enabled = _to_bool(face.get("enabled"), config.face.enabled)
+            os.environ["FACE_RECOGNITION_ENABLED"] = str(config.face.enabled).lower()
+        if face.get("match_threshold") is not None:
+            try:
+                config.face.match_threshold = float(face["match_threshold"])
+                os.environ["FACE_MATCH_THRESHOLD"] = str(config.face.match_threshold)
+            except (TypeError, ValueError):
+                pass
+        if face.get("match_margin") is not None:
+            try:
+                config.face.match_margin = float(face["match_margin"])
+                os.environ["FACE_MATCH_MARGIN"] = str(config.face.match_margin)
+            except (TypeError, ValueError):
+                pass
+        if face.get("frame_interval_sec") is not None:
+            try:
+                config.face.frame_interval_sec = int(face["frame_interval_sec"])
+                os.environ["FACE_FRAME_INTERVAL_SEC"] = str(config.face.frame_interval_sec)
+            except (TypeError, ValueError):
+                pass
+
     if llm:
         _set_provider_environment("llm", llm)
         if "enabled" in llm:
             config.llm.enabled = _to_bool(llm.get("enabled"), config.llm.enabled)
         config.llm.endpoint = _trimmed(llm.get("endpoint"), config.llm.endpoint)
         config.llm.model = _trimmed(llm.get("model"), config.llm.model)
-        api_key = _trimmed(llm.get("api_key"))
+        api_key = _clean_secret(llm.get("api_key"))
         if api_key:
             config.llm.api_key = api_key
             os.environ["LLM_API_KEY"] = api_key

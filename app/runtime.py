@@ -4,11 +4,16 @@ from __future__ import annotations
 import asyncio
 import importlib.metadata
 import inspect
+import logging
 import shutil
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
+
+
+logger = logging.getLogger("Matrix_Runtime")
 
 
 def _package_version(name: str) -> Optional[str]:
@@ -224,6 +229,148 @@ class EngineSnapshot:
 
     asr: object
     speaker: object
+
+
+class LazyRuntimeEngine:
+    """Load a heavyweight inference engine only when a real request needs it."""
+
+    def __init__(
+        self,
+        name: str,
+        loader: Callable[[], object],
+        *,
+        engine_type_getter: Callable[[], str | None] | None = None,
+        model_getter: Callable[[], str | None] | None = None,
+        device_getter: Callable[[], str | None] | None = None,
+    ) -> None:
+        self._lazy_name = name
+        self._lazy_loader = loader
+        self._lazy_engine_type_getter = engine_type_getter
+        self._lazy_model_getter = model_getter
+        self._lazy_device_getter = device_getter
+        self._lazy_lock = threading.RLock()
+        self._lazy_engine: object | None = None
+        self._lazy_last_error: str | None = None
+
+    @property
+    def loaded(self) -> bool:
+        return self._lazy_engine is not None
+
+    @property
+    def last_error(self) -> str | None:
+        return self._lazy_last_error
+
+    @property
+    def initialized(self) -> bool:
+        if self._lazy_engine is None:
+            return self._lazy_last_error is None
+        return bool(getattr(self._lazy_engine, "initialized", True))
+
+    @property
+    def engine_type(self) -> str | None:
+        if self._lazy_engine is not None:
+            value = getattr(self._lazy_engine, "engine_type", None)
+            if isinstance(value, str):
+                return value
+        if self._lazy_engine_type_getter is not None:
+            try:
+                return self._lazy_engine_type_getter()
+            except Exception:
+                logger.debug("[%s] lazy engine_type unavailable", self._lazy_name, exc_info=True)
+        return None
+
+    @property
+    def kind(self) -> str:
+        if self._lazy_engine is not None:
+            value = getattr(self._lazy_engine, "kind", None)
+            if isinstance(value, str):
+                return value
+        value = self.engine_type
+        return value or self._lazy_name
+
+    @property
+    def _model_name(self) -> str | None:
+        if self._lazy_engine is not None:
+            value = getattr(self._lazy_engine, "_model_name", None)
+            if isinstance(value, str):
+                return value
+        if self._lazy_model_getter is not None:
+            try:
+                return self._lazy_model_getter()
+            except Exception:
+                logger.debug("[%s] lazy model metadata unavailable", self._lazy_name, exc_info=True)
+        return None
+
+    @property
+    def model_id(self) -> str | None:
+        if self._lazy_engine is not None:
+            value = getattr(self._lazy_engine, "model_id", None)
+            if isinstance(value, str):
+                return value
+        return self._model_name
+
+    @property
+    def device(self) -> str:
+        if self._lazy_engine is not None:
+            value = getattr(self._lazy_engine, "device", None)
+            if value is None:
+                value = getattr(self._lazy_engine, "_device", None)
+            if value is not None:
+                return str(value)
+        if self._lazy_device_getter is not None:
+            try:
+                value = self._lazy_device_getter()
+                if value:
+                    return str(value)
+            except Exception:
+                logger.debug("[%s] lazy device metadata unavailable", self._lazy_name, exc_info=True)
+        return "unknown"
+
+    @property
+    def collection(self):
+        if self._lazy_engine is None:
+            return None
+        return getattr(self._lazy_engine, "collection", None)
+
+    def resolve(self) -> object:
+        if self._lazy_engine is not None:
+            return self._lazy_engine
+        with self._lazy_lock:
+            if self._lazy_engine is not None:
+                return self._lazy_engine
+            logger.info("[%s] 延迟加载开始", self._lazy_name)
+            try:
+                engine = self._lazy_loader()
+                if engine is None:
+                    raise RuntimeError(f"{self._lazy_name} engine loader returned None")
+                self._lazy_engine = engine
+                self._lazy_last_error = None
+                logger.info("[%s] 延迟加载完成: %s", self._lazy_name, type(engine).__name__)
+                return engine
+            except Exception as exc:
+                self._lazy_last_error = str(exc)
+                logger.error("[%s] 延迟加载失败: %s", self._lazy_name, exc)
+                raise
+
+    def close(self):
+        if self._lazy_engine is None:
+            return None
+        hook = next(
+            (
+                getattr(self._lazy_engine, name, None)
+                for name in ("close", "shutdown", "unload")
+                if callable(getattr(self._lazy_engine, name, None))
+            ),
+            None,
+        )
+        if hook is None:
+            return None
+        return hook()
+
+    def __getattr__(self, name: str):
+        if name.startswith("_lazy_"):
+            raise AttributeError(name)
+        return getattr(self.resolve(), name)
 
 
 class ApplicationRuntime:

@@ -9,6 +9,7 @@ from app.api.settings import router as settings_router
 from app.api.meetings import router as meetings_router
 from app.api.jobs import router as jobs_router
 from app.api.people import router as people_router
+from app.api.face import router as face_router
 
 api_router = APIRouter()
 api_router.include_router(health_router)
@@ -20,3 +21,4 @@ api_router.include_router(settings_router)
 api_router.include_router(meetings_router)
 api_router.include_router(jobs_router)
 api_router.include_router(people_router)
+api_router.include_router(face_router)

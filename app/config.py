@@ -7,18 +7,69 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger("Matrix_Core")
 
+ENV_FILE_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "cp936", "mbcs")
+
+
+def read_text_with_encoding_fallback(path: Path) -> str:
+    """Read text files that may have been edited by Windows ANSI tools."""
+    last_error: Exception | None = None
+    for encoding in ENV_FILE_ENCODINGS:
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+        except LookupError:
+            continue
+    if last_error:
+        raise last_error
+    return path.read_text(encoding="utf-8")
+
+
+def load_project_env(env_path: Path | None = None) -> str | None:
+    """Load .env without crashing when the file is GBK/ANSI encoded."""
+    env_path = env_path or (Path(__file__).parent.parent / ".env")
+    if not env_path.exists():
+        return None
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return None
+
+    last_error: Exception | None = None
+    for encoding in ENV_FILE_ENCODINGS:
+        try:
+            load_dotenv(env_path, encoding=encoding)
+            if encoding not in ("utf-8-sig", "utf-8"):
+                logger.warning(
+                    ".env 使用 %s 编码读取成功，建议在设置页保存一次或另存为 UTF-8",
+                    encoding,
+                )
+            return encoding
+        except UnicodeDecodeError as exc:
+            last_error = exc
+        except LookupError:
+            continue
+        except Exception as exc:
+            last_error = exc
+            break
+    logger.warning("无法读取 .env，已跳过该文件: %s", last_error)
+    return None
+
+
 # 加载 .env 文件
-try:
-    from dotenv import load_dotenv
-    env_path = Path(__file__).parent.parent / ".env"
-    if env_path.exists():
-        load_dotenv(env_path)
-except ImportError:
-    pass
+load_project_env()
 
 
 def get_env_str(key: str, default: str = "") -> str:
     return os.getenv(key, default)
+
+
+def get_env_secret(key: str, default: str = "") -> str:
+    value = os.getenv(key, default)
+    text = (value or "").strip()
+    if text.startswith("#") or text.startswith("＃"):
+        return ""
+    return text
 
 
 def get_env_int(key: str, default: int) -> int:
@@ -302,6 +353,39 @@ class SpeakerConfig:
 
 
 @dataclass
+class FaceConfig:
+    """人脸签到配置: InsightFace + ONNXRuntime 本地推理."""
+
+    enabled: bool = True
+    provider: str = "insightface"
+    model: str = "buffalo_l"
+    device: str = "auto"
+    match_threshold: float = 0.55
+    match_margin: float = 0.08
+    frame_interval_sec: int = 5
+    upload_max_file_size: int = 15 * 1024 * 1024
+
+    @classmethod
+    def from_env(cls) -> "FaceConfig":
+        device = get_env_str("FACE_DEVICE", "auto").lower().strip()
+        if device not in {"auto", "cpu", "cuda", "directml"}:
+            logger.warning("无效 FACE_DEVICE=%r，回退 auto", device)
+            device = "auto"
+        return cls(
+            enabled=get_env_bool("FACE_RECOGNITION_ENABLED", True),
+            provider=get_env_str("FACE_PROVIDER", "insightface").lower().strip(),
+            model=get_env_str("FACE_MODEL", "buffalo_l").strip() or "buffalo_l",
+            device=device,
+            match_threshold=get_env_float("FACE_MATCH_THRESHOLD", 0.55),
+            match_margin=get_env_float("FACE_MATCH_MARGIN", 0.08),
+            frame_interval_sec=max(2, get_env_int("FACE_FRAME_INTERVAL_SEC", 5)),
+            upload_max_file_size=max(1, get_env_int("FACE_UPLOAD_MAX_FILE_SIZE_MB", 15))
+            * 1024
+            * 1024,
+        )
+
+
+@dataclass
 class RateLimitConfig:
     """速率限制配置"""
     enabled: bool = True
@@ -383,7 +467,7 @@ class LLMConfig:
     endpoint: str = "http://127.0.0.1:11434/v1"
     model: str = "qwen2.5:1.5b"
     api_key: Optional[str] = None           # Bearer token，公网 OpenAI 兼容接口需要
-    timeout_sec: int = 60
+    timeout_sec: int = 200
     max_input_tokens: int = 8000
     mock: bool = False
     allowed_hosts: tuple[str, ...] = ("127.0.0.1", "::1", "localhost")
@@ -391,13 +475,13 @@ class LLMConfig:
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
-        api_key = get_env_str("LLM_API_KEY", "") or None
+        api_key = get_env_secret("LLM_API_KEY", "") or None
         return cls(
             enabled=get_env_bool("LLM_ENABLED", False),
             endpoint=get_env_str("LLM_ENDPOINT", "http://127.0.0.1:11434/v1"),
             model=get_env_str("LLM_MODEL", "qwen2.5:1.5b"),
             api_key=api_key,
-            timeout_sec=get_env_int("LLM_TIMEOUT_SEC", 60),
+            timeout_sec=get_env_int("LLM_TIMEOUT_SEC", 200),
             max_input_tokens=get_env_int("LLM_MAX_INPUT_TOKENS", 8000),
             mock=get_env_bool("LLM_MOCK", False),
             allowed_hosts=get_env_str_list("LLM_ALLOWED_HOSTS",
@@ -441,6 +525,7 @@ class AppConfig:
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
+    face: FaceConfig = field(default_factory=FaceConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     cors: CORSConfig = field(default_factory=CORSConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
@@ -456,6 +541,7 @@ class AppConfig:
             rate_limit=RateLimitConfig.from_env(),
             storage=StorageConfig.from_env(),
             models=ModelsConfig.from_env(),
+            face=FaceConfig.from_env(),
             llm=LLMConfig.from_env(),
             cors=CORSConfig.from_env(),
             auth=AuthConfig.from_env(),

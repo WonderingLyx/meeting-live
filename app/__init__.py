@@ -229,28 +229,54 @@ def create_app() -> FastAPI:
 def _init_engines(app: FastAPI):
     """初始化推理引擎。
 
-    引擎加载失败不应击穿整个 app:用降级模式(None 引擎)继续启动,
-    /ready 自然返 not_ready,前端只读模式可用,而不是进程崩溃。
+    推理模型按需延迟加载。Windows GPU 运行时里,模型库可能在 native DLL
+    层崩溃(例如 0xC0000005),Python try/except 捕获不到。启动阶段只创建
+    轻量管理器和代理,让首页/设置页先可用,真正转写或注册声样时再加载模型。
     """
     from app.services.model_config import apply_model_settings_to_runtime
 
     apply_model_settings_to_runtime()
 
-    from engine.asr import get_asr_manager
-    from engine.speaker import get_speaker_engine
+    from app.runtime import ApplicationRuntime, LazyRuntimeEngine
+    from app.runtime import diagnose_audio_dependencies
 
     asr_engine = None
     asr_manager = None
     try:
+        from engine.asr import get_asr_engine_info, get_asr_manager
+
         asr_manager = get_asr_manager()
-        asr_engine = asr_manager.get_engine()
+        asr_engine = LazyRuntimeEngine(
+            "ASR",
+            asr_manager.get_engine,
+            engine_type_getter=lambda: getattr(asr_manager, "current_type", None),
+            model_getter=lambda: str(
+                get_asr_engine_info(getattr(asr_manager, "current_type", None)).get("model")
+                or ""
+            ),
+            device_getter=lambda: config.audio.asr_device,
+        )
     except Exception as exc:
-        logger.error("[APP] ASR 引擎初始化失败,降级为无 ASR 模式: %s", exc)
+        logger.error("[APP] ASR 管理器初始化失败,降级为无 ASR 模式: %s", exc)
     spk_engine = None
     try:
-        spk_engine = get_speaker_engine()
+        from engine.speaker import get_speaker_engine
+        from engine.speaker.speaker_factory import (
+            embedding_model_id,
+            get_engine_info as get_speaker_engine_info,
+        )
+
+        spk_engine = LazyRuntimeEngine(
+            "Speaker",
+            get_speaker_engine,
+            engine_type_getter=lambda: str(get_speaker_engine_info().get("type") or ""),
+            model_getter=lambda: embedding_model_id(
+                str(get_speaker_engine_info().get("type") or config.speaker.engine_type)
+            ),
+            device_getter=lambda: config.speaker.diarization_device,
+        )
     except Exception as exc:
-        logger.error("[APP] 声纹引擎初始化失败,降级为无声纹模式: %s", exc)
+        logger.error("[APP] 声纹管理器初始化失败,降级为无声纹模式: %s", exc)
 
     try:
         asr_info = asr_manager.get_engine_info()
@@ -264,8 +290,6 @@ def _init_engines(app: FastAPI):
     logger.info(f"ASR 引擎: {asr_info['name']}, 模型: {asr_info['model']}")
     logger.info(f"声纹引擎: {engine_info['name']}, 模型: {engine_info['model']}")
 
-    from app.runtime import ApplicationRuntime
-    from app.runtime import diagnose_audio_dependencies
     runtime = ApplicationRuntime(asr_engine, spk_engine)
 
     dependency_report = diagnose_audio_dependencies()

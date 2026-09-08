@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from app.config import config
+from app.config import config, read_text_with_encoding_fallback
 from app.services.model_config import (
     apply_model_settings_to_runtime,
     public_model_settings,
@@ -52,7 +52,7 @@ class SpeakerSettingsRequest(BaseModel):
 
 
 class ModelSourceTestRequest(BaseModel):
-    section: str = Field(..., pattern="^(asr|speaker|diarization)$")
+    section: str = Field(..., pattern="^(asr|speaker|diarization|face)$")
     provider: str = Field("custom", min_length=1, max_length=40)
     endpoint: Optional[str] = Field(None, max_length=500)
     api_key: Optional[str] = Field(None, max_length=500)
@@ -94,24 +94,31 @@ def _mask_secret(value: str | None) -> str | None:
     return value[:6] + "***" + value[-4:]
 
 
+def _clean_secret(value: str | None) -> str | None:
+    text = (value or "").strip().strip('"').strip("'")
+    if not text or text.startswith("#") or text.startswith("＃"):
+        return None
+    return text
+
+
 def _read_env_value(key: str) -> str | None:
     if not ENV_PATH.is_file():
         return None
     try:
-        for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+        for line in read_text_with_encoding_fallback(ENV_PATH).splitlines():
             stripped = line.strip()
             if not stripped or stripped.startswith("#") or "=" not in stripped:
                 continue
             k, v = stripped.split("=", 1)
             if k.strip() == key:
-                return v.strip().strip('"').strip("'")
+                return _clean_secret(v)
     except OSError:
         return None
     return None
 
 
 def _write_env_values(values: dict[str, str]) -> None:
-    lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.exists() else []
+    lines = read_text_with_encoding_fallback(ENV_PATH).splitlines() if ENV_PATH.exists() else []
     seen: set[str] = set()
     out: list[str] = []
     for line in lines:
@@ -134,13 +141,13 @@ def _write_env_values(values: dict[str, str]) -> None:
 def _diarization_status(*, load: bool = False) -> dict[str, Any]:
     model_settings = read_model_settings(include_env_secrets=True)
     diarization_settings = model_settings.get("diarization", {})
-    env_token = (
+    env_token = _clean_secret(
         os.environ.get("HF_TOKEN")
         or os.environ.get("HUGGINGFACE_TOKEN")
         or os.environ.get("MODELSCOPE_API_TOKEN")
         or os.environ.get("DIARIZATION_API_KEY")
     )
-    configured_token = (diarization_settings.get("api_key") or "").strip()
+    configured_token = _clean_secret(diarization_settings.get("api_key"))
     file_token = (
         _read_env_value("DIARIZATION_API_KEY")
         or _read_env_value("HF_TOKEN")
@@ -470,6 +477,7 @@ async def get_model_config():
     from engine.asr.factory import ASR_ENGINE_CONFIG
     from engine.speaker.speaker_factory import ENGINE_CONFIG
     from app.services.pyannote_diarization import get_all_diarization_engines
+    from app.services.face_attendance import get_all_face_models
 
     return {
         **public_model_settings(),
@@ -477,6 +485,7 @@ async def get_model_config():
             "asr": ASR_ENGINE_CONFIG,
             "speaker": ENGINE_CONFIG,
             "diarization": get_all_diarization_engines(),
+            "face": get_all_face_models(),
             "llm_providers": [
                 {"key": "ollama", "label": "Ollama", "endpoint": "http://127.0.0.1:11434/v1"},
                 {"key": "lmstudio", "label": "LM Studio", "endpoint": "http://127.0.0.1:1234/v1"},

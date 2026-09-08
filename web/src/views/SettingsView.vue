@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { getAsrSettings, getEngines, getModelConfig, getModels, getSpeakerSettings, saveAsrSettings, saveSpeakerSettings, switchAsrEngine, switchEngine, testAsrEngine, testModelSource, type AsrInfo, type AsrSettings, type AsrTestResponse, type EngineInfo, type ModelConfigResponse, type ModelSourceProvider, type ModelsInfo, type SpeakerSettings } from '../api/engines'
 import { getLlmSettings, getLlmStatus, saveLlmSettings, testLlmConnection, getLlmPrompts, saveLlmPrompts, listLlmModels, type LlmSettings, type LlmPrompts } from '../api/llm'
 import { getDiarizationSettings, saveDiarizationSettings, testDiarizationSettings, type DiarizationSettings, type DiarizationEngineInfo } from '../api/diarization'
+import { getFaceSettings, saveFaceSettings, testFaceSettings, type FaceSettings, type FaceModelInfo } from '../api/face'
 type LlmResp = Awaited<ReturnType<typeof getLlmStatus>>
 type ErrorRecord = {
   id: number
@@ -30,24 +31,29 @@ const llmModelOptions = ref<Array<{ id: string; label: string }>>([])
 const llmModelSource = ref('')
 const llmModelError = ref('')
 const diarization = ref<DiarizationSettings | null>(null)
+const faceSettings = ref<FaceSettings | null>(null)
 const asrSettings = ref<AsrSettings | null>(null)
 const speakerSettings = ref<SpeakerSettings | null>(null)
 const modelConfig = ref<ModelConfigResponse | null>(null)
 const hfToken = ref('')
 const asrApiKey = ref('')
 const speakerApiKey = ref('')
+const faceApiKey = ref('')
 const llmApiKey = ref('')
 const savingLlm = ref(false)
 const savingPrompts = ref(false)
 const loadingLlmModels = ref(false)
 const savingDiarization = ref(false)
+const savingFace = ref(false)
 const savingAsrConfig = ref(false)
 const savingAsrDevice = ref(false)
 const savingSpeaker = ref(false)
 const testingDiarization = ref(false)
+const testingFace = ref(false)
 const testingAsrSource = ref(false)
 const testingSpeakerSource = ref(false)
 const testingDiarizationSource = ref(false)
+const testingFaceSource = ref(false)
 const showPrompts = ref(false)
 const showErrorPanel = ref(false)
 const showAsrConfig = ref(false)
@@ -57,6 +63,8 @@ const showSpeakerConfig = ref(false)
 const showSpeakerModels = ref(false)
 const showDiarizationConfig = ref(false)
 const showDiarizationModels = ref(false)
+const showFaceConfig = ref(false)
+const showFaceModels = ref(false)
 const testingLlm = ref(false)
 const testingAsr = ref(false)
 const switchingEngine = ref<string | null>(null)
@@ -223,14 +231,16 @@ const llmProviders = [
 const modelSourceProviders: ModelSourceProvider[] = [
   { key: 'modelscope', label: 'ModelScope', endpoint: 'https://modelscope.cn', token_env: 'MODELSCOPE_API_TOKEN', scope: 'asr,speaker,diarization' },
   { key: 'huggingface', label: 'Hugging Face', endpoint: 'https://huggingface.co', token_env: 'HF_TOKEN', scope: 'asr,speaker,diarization' },
-  { key: 'local', label: 'Local cache/path', endpoint: 'file://./models', token_env: '', scope: 'asr,speaker,diarization' },
-  { key: 'custom', label: 'Custom', endpoint: '', token_env: '', scope: 'asr,speaker,diarization' },
+  { key: 'insightface', label: 'InsightFace', endpoint: 'file://./models/face/insightface', token_env: 'FACE_API_KEY', scope: 'face' },
+  { key: 'local', label: 'Local cache/path', endpoint: 'file://./models', token_env: '', scope: 'asr,speaker,diarization,face' },
+  { key: 'custom', label: 'Custom', endpoint: '', token_env: '', scope: 'asr,speaker,diarization,face' },
 ]
 
 const sourceProviders = computed(() => modelConfig.value?.providers?.length ? modelConfig.value.providers : modelSourceProviders)
 const asrProviderOptions = computed(() => sourceProviders.value.filter((p) => !p.scope || p.scope.includes('asr')))
 const speakerProviderOptions = computed(() => sourceProviders.value.filter((p) => !p.scope || p.scope.includes('speaker')))
 const diarizationProviderOptions = computed(() => sourceProviders.value.filter((p) => !p.scope || p.scope.includes('diarization')))
+const faceProviderOptions = computed(() => sourceProviders.value.filter((p) => !p.scope || p.scope.includes('face')))
 const diarizationEngines = computed<Record<string, DiarizationEngineInfo>>(() => {
   const fromSettings = diarization.value?.engines || {}
   const fromModelConfig = (modelConfig.value?.supported?.diarization || {}) as Record<string, DiarizationEngineInfo>
@@ -264,14 +274,29 @@ const selectedDiarizationInfo = computed(() => (
   diarization.value ? diarizationEngines.value[diarization.value.engine] : undefined
 ))
 const selectedDiarizationName = computed(() => selectedDiarizationInfo.value?.name || diarization.value?.engine || '—')
+const faceModels = computed<Record<string, FaceModelInfo>>(() => {
+  const fromSettings = faceSettings.value?.models || {}
+  const fromModelConfig = (modelConfig.value?.supported?.face || {}) as Record<string, FaceModelInfo>
+  return Object.keys(fromSettings).length ? fromSettings : fromModelConfig
+})
+const faceModelList = computed(() => {
+  const order = ['buffalo_l', 'buffalo_m', 'buffalo_s']
+  const models = faceModels.value
+  return [...order.filter((key) => models[key]), ...Object.keys(models).filter((key) => !order.includes(key))]
+})
+const selectedFaceName = computed(() => {
+  const key = faceSettings.value?.model || 'buffalo_l'
+  return faceModels.value[key]?.name || key
+})
 
 let asrPollTimer: number | null = null
 
-function fillProviderEndpoint(target: 'asr' | 'speaker' | 'diarization') {
+function fillProviderEndpoint(target: 'asr' | 'speaker' | 'diarization' | 'face') {
   const current =
     target === 'asr' ? asrSettings.value
       : target === 'speaker' ? speakerSettings.value
-        : diarization.value
+        : target === 'diarization' ? diarization.value
+          : faceSettings.value
   if (!current) return
   const provider = sourceProviders.value.find((p) => p.key === current.provider)
   if (provider && provider.endpoint) {
@@ -296,26 +321,40 @@ function diarizationEngineDescription(info?: DiarizationEngineInfo) {
   return isEnglish.value ? (info.description_en || info.description || '') : (info.description || info.description_en || '')
 }
 
-function sourceTestToastPrefix(section: 'asr' | 'speaker' | 'diarization') {
+function faceModelDescription(info?: FaceModelInfo) {
+  if (!info) return ''
+  return isEnglish.value ? (info.description_en || info.description || '') : (info.description || info.description_en || '')
+}
+
+function onFaceModelChange() {
+  if (!faceSettings.value) return
+  faceSettings.value.model = faceSettings.value.model || 'buffalo_l'
+}
+
+function sourceTestToastPrefix(section: 'asr' | 'speaker' | 'diarization' | 'face') {
   if (section === 'asr') return 'ASR'
   if (section === 'speaker') return '声纹'
+  if (section === 'face') return '人脸识别'
   return '说话人分离'
 }
 
-async function testSourceConnection(section: 'asr' | 'speaker' | 'diarization') {
+async function testSourceConnection(section: 'asr' | 'speaker' | 'diarization' | 'face') {
   const target =
     section === 'asr' ? asrSettings.value
       : section === 'speaker' ? speakerSettings.value
-        : diarization.value
+        : section === 'diarization' ? diarization.value
+          : faceSettings.value
   if (!target) return
   const key =
     section === 'asr' ? asrApiKey.value.trim()
       : section === 'speaker' ? speakerApiKey.value.trim()
-        : hfToken.value.trim()
+        : section === 'diarization' ? hfToken.value.trim()
+          : faceApiKey.value.trim()
   const busy =
     section === 'asr' ? testingAsrSource
       : section === 'speaker' ? testingSpeakerSource
-        : testingDiarizationSource
+        : section === 'diarization' ? testingDiarizationSource
+          : testingFaceSource
   if (busy.value) return
   try {
     busy.value = true
@@ -338,6 +377,7 @@ function modelConfigPath() {
     || asrSettings.value?.config_path
     || speakerSettings.value?.config_path
     || diarization.value?.config_path
+    || faceSettings.value?.config_path
     || llmSettings.value?.config_path
     || ''
 }
@@ -403,6 +443,14 @@ async function refreshSpeakerSettings() {
   }
 }
 
+async function refreshFaceSettings() {
+  try {
+    faceSettings.value = await getFaceSettings()
+  } catch {
+    faceSettings.value = null
+  }
+}
+
 async function load() {
   await refreshModelConfig()
   try {
@@ -413,6 +461,7 @@ async function load() {
   await refreshModels()
   await refreshAsrSettings()
   await refreshSpeakerSettings()
+  await refreshFaceSettings()
   try {
     diarization.value = await getDiarizationSettings()
   } catch {
@@ -669,6 +718,61 @@ async function testDiarizationConfig(confirm = true) {
   }
 }
 
+async function saveFaceConfig() {
+  if (!faceSettings.value || savingFace.value) return
+  try {
+    savingFace.value = true
+    faceSettings.value = await saveFaceSettings({
+      provider: faceSettings.value.provider || 'insightface',
+      endpoint: faceSettings.value.endpoint || 'file://./models/face/insightface',
+      api_key: faceApiKey.value.trim() || null,
+      model: faceSettings.value.model || 'buffalo_l',
+      device: faceSettings.value.device || 'auto',
+      enabled: !!faceSettings.value.enabled,
+      match_threshold: Number(faceSettings.value.match_threshold) || 0.55,
+      match_margin: Number(faceSettings.value.match_margin) || 0.08,
+      frame_interval_sec: Number(faceSettings.value.frame_interval_sec) || 5,
+    })
+    faceApiKey.value = ''
+    await refreshModelConfig()
+    window.toast?.('人脸识别配置已保存', 'ok')
+  } catch (e) {
+    window.toast?.(`人脸识别配置保存失败: ${e instanceof Error ? e.message : e}`, 'error')
+  } finally {
+    savingFace.value = false
+  }
+}
+
+async function pickFaceModel(key: string) {
+  if (!faceSettings.value || savingFace.value || testingFace.value) return
+  if (key === faceSettings.value.model && faceSettings.value.loaded) return
+  faceSettings.value.model = key
+  onFaceModelChange()
+  await saveFaceConfig()
+}
+
+async function testFaceConfig() {
+  if (!faceSettings.value || testingFace.value) return
+  const ok = await dialog.showConfirm({
+    title: '加载人脸识别模型?',
+    message: `测试会尝试加载 ${selectedFaceName.value}。首次使用可能联网下载 InsightFace 模型包。`,
+    detail: `设备: ${faceSettings.value.device}`,
+    confirmText: '开始测试',
+    cancelText: t('btn.cancel') || '取消',
+    danger: false,
+  })
+  if (!ok) return
+  try {
+    testingFace.value = true
+    faceSettings.value = await testFaceSettings()
+    window.toast?.(faceSettings.value.loaded ? '人脸识别模型已可用' : (faceSettings.value.last_error || '人脸识别模型不可用'), faceSettings.value.loaded ? 'ok' : 'error')
+  } catch (e) {
+    window.toast?.(`测试失败: ${e instanceof Error ? e.message : e}`, 'error')
+  } finally {
+    testingFace.value = false
+  }
+}
+
 function isGatedRepoError(message?: string | null) {
   return !!message && /403|gated repo|authorized list|访问被拒绝/i.test(message)
 }
@@ -700,7 +804,7 @@ async function saveLlmConfig() {
     const payload = {
       ...llmSettings.value,
       api_key: llmApiKey.value.trim() || null,
-      timeout_sec: Math.max(10, Math.min(600, Number(llmSettings.value.timeout_sec) || 120)),
+      timeout_sec: Math.max(10, Math.min(600, Number(llmSettings.value.timeout_sec) || 200)),
       max_input_tokens: Math.max(500, Math.min(200000, Number(llmSettings.value.max_input_tokens) || 8000)),
     }
     await saveLlmSettings(payload)
@@ -1157,6 +1261,107 @@ onUnmounted(() => {
       <div v-if="isGatedRepoError(diarization.last_error)" class="llm-secret-note danger">
         403 表示当前 HF_TOKEN 所属账号还没有获得该 gated 模型访问权限。请用同一个 Hugging Face 账号打开模型页面接受/申请访问；如果使用 fine-grained token，还要允许读取公开 gated repositories。
       </div>
+    </div>
+
+    <!-- 人脸识别签到 -->
+    <div v-if="faceSettings" class="set-row face-row">
+      <div class="l llm-head">
+        <span class="llm-title"><span>人脸识别签到</span><em>FACE</em></span>
+        <span class="diag-badge" :class="{ on: faceSettings.loaded }">{{ faceSettings.loaded ? '已加载' : (faceSettings.enabled ? '未加载' : '关闭') }}</span>
+      </div>
+      <div class="d">当前: {{ selectedFaceName }} · Provider: {{ faceSettings.loaded_provider || faceSettings.device }}</div>
+      <div class="section-toolbar">
+        <button class="btn ghost sm" type="button" @click="showFaceModels = !showFaceModels">{{ showFaceModels ? '收起模型' : '切换模型' }}</button>
+        <button class="btn ghost sm" type="button" @click="showFaceConfig = !showFaceConfig">{{ showFaceConfig ? '收起设置' : '模型设置' }}</button>
+        <button class="btn ghost sm" type="button" :disabled="testingFace || !faceSettings.enabled" @click="testFaceConfig">
+          {{ testingFace ? '加载中…' : '测试加载' }}
+        </button>
+      </div>
+      <div v-if="showFaceModels" class="eng-list compact collapsed-list">
+        <div
+          v-for="key in faceModelList"
+          :key="key"
+          class="eng-row"
+          :class="{ active: key === faceSettings.model, switching: key === faceSettings.model && (savingFace || testingFace), disabled: savingFace || testingFace || faceModels[key]?.available === false }"
+          @click="pickFaceModel(key)"
+        >
+          <div class="radio" />
+          <div class="info">
+            <div class="n">{{ faceModels[key]?.name || key }}</div>
+            <div class="m">
+              <b>{{ faceModels[key]?.embedding_dim || 512 }}d</b>
+              <span class="sep">·</span>
+              {{ faceModels[key]?.provider || 'insightface' }}
+              <span v-if="faceModels[key]?.available === false" class="sep">·</span>
+              <span v-if="faceModels[key]?.available === false">{{ faceModels[key]?.install_hint || '依赖不可用' }}</span>
+            </div>
+            <div class="m muted">{{ faceModelDescription(faceModels[key]) }}</div>
+            <div class="m model-source">Model: {{ faceModels[key]?.model || key }}</div>
+          </div>
+          <span v-if="key === faceSettings.model" class="pill">{{ faceSettings.loaded ? '当前' : '已选' }}</span>
+        </div>
+      </div>
+      <div v-if="showFaceConfig" class="llm-form compact-config">
+        <label class="inline-check full">
+          <input v-model="faceSettings.enabled" type="checkbox" />
+          <span>启用人脸识别签到</span>
+        </label>
+        <label>
+          <span>Provider</span>
+          <select v-model="faceSettings.provider" @change="fillProviderEndpoint('face')">
+            <option v-for="p in faceProviderOptions" :key="p.key" :value="p.key">{{ p.label }}</option>
+          </select>
+        </label>
+        <label>
+          <span>Model</span>
+          <select v-model="faceSettings.model" @change="onFaceModelChange">
+            <option v-for="key in faceModelList" :key="key" :value="key">{{ faceModels[key]?.name || key }}</option>
+          </select>
+        </label>
+        <label class="full">
+          <span>Endpoint / Local Path</span>
+          <input v-model.trim="faceSettings.endpoint" type="text" autocomplete="off" placeholder="file://./models/face/insightface" />
+        </label>
+        <label>
+          <span>API Key</span>
+          <input v-model.trim="faceApiKey" type="password" autocomplete="off" :placeholder="faceSettings.api_key_configured ? `已配置 ${faceSettings.api_key_preview || ''}, 留空保留` : '本地 InsightFace 可留空'" />
+        </label>
+        <label>
+          <span>运行设备</span>
+          <select v-model="faceSettings.device">
+            <option value="auto">auto</option>
+            <option value="cpu">cpu</option>
+            <option value="cuda">nvidia/cuda</option>
+            <option value="directml">amd/directml</option>
+          </select>
+        </label>
+        <label>
+          <span>匹配阈值</span>
+          <input v-model.number="faceSettings.match_threshold" type="number" min="0" max="1" step="0.01" />
+        </label>
+        <label>
+          <span>歧义间隔</span>
+          <input v-model.number="faceSettings.match_margin" type="number" min="0" max="1" step="0.01" />
+        </label>
+        <label>
+          <span>识别间隔秒</span>
+          <input v-model.number="faceSettings.frame_interval_sec" type="number" min="2" max="60" step="1" />
+        </label>
+      </div>
+      <div v-if="showFaceConfig" class="llm-options llm-actions">
+        <button class="btn primary sm" type="button" :disabled="savingFace" @click="saveFaceConfig">
+          {{ savingFace ? '保存中…' : '保存人脸配置' }}
+        </button>
+        <button class="btn ghost sm" type="button" :disabled="testingFaceSource" @click="testSourceConnection('face')">
+          {{ testingFaceSource ? '测试中…' : '测试连接' }}
+        </button>
+      </div>
+      <div class="llm-status diag-status">
+        <span class="model">· model={{ faceSettings.model_id || faceSettings.model }}</span>
+        <span class="model">· device={{ faceSettings.device }}</span>
+        <span class="model">· providers={{ faceSettings.dependencies.available_providers.join(' / ') || 'none' }}</span>
+      </div>
+      <div v-if="faceSettings.last_error" class="llm-error">{{ faceSettings.last_error }}</div>
     </div>
 
     <!-- LLM -->

@@ -691,6 +691,15 @@ class MeetingRepository:
             notes = conn.execute(
                 "SELECT * FROM meeting_notes WHERE meeting_id = ?", (meeting_id,)
             ).fetchall()
+            attendance = conn.execute(
+                """SELECT ma.*, p.name AS person_name
+                   FROM meeting_attendance ma
+                   JOIN people p ON p.id = ma.person_id
+                   WHERE ma.meeting_id = ?
+                   ORDER BY ma.first_seen_sec IS NULL, ma.first_seen_sec ASC,
+                            ma.updated_at DESC""",
+                (meeting_id,),
+            ).fetchall()
         parsed_segments = []
         for row in segments:
             item = dict(row)
@@ -701,6 +710,7 @@ class MeetingRepository:
             "segments": parsed_segments,
             "speakers": [dict(row) for row in speakers],
             "notes": [dict(row) for row in notes],
+            "attendance": [dict(row) for row in attendance],
         }
 
     def assign_segments(self, meeting_id: str, segment_ids: list[int], speaker_id: str | None) -> int:
@@ -851,6 +861,98 @@ class MeetingRepository:
                     meeting_id,
                     speaker_label,
                 ),
+            )
+            conn.commit()
+        return cursor.rowcount > 0
+
+    def list_attendance(self, meeting_id: str) -> list[dict]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """SELECT ma.*, p.name AS person_name
+                   FROM meeting_attendance ma
+                   JOIN people p ON p.id = ma.person_id
+                   WHERE ma.meeting_id = ?
+                   ORDER BY ma.first_seen_sec IS NULL, ma.first_seen_sec ASC,
+                            ma.updated_at DESC""",
+                (meeting_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def upsert_attendance(
+        self,
+        meeting_id: str,
+        person_id: str,
+        *,
+        source: str = "face",
+        confidence: float | None = None,
+        timestamp_sec: float | None = None,
+        snapshot_path: str | None = None,
+    ) -> dict:
+        if source not in {"face", "manual"}:
+            raise ValueError("invalid attendance source")
+        attendance_id = str(uuid.uuid4())
+        with self.db.connect() as conn:
+            if conn.execute(
+                "SELECT 1 FROM meetings WHERE id = ?", (meeting_id,)
+            ).fetchone() is None:
+                raise ValueError("meeting not found")
+            if conn.execute(
+                "SELECT 1 FROM people WHERE id = ?", (person_id,)
+            ).fetchone() is None:
+                raise ValueError("person not found")
+            conn.execute(
+                """INSERT INTO meeting_attendance
+                   (id, meeting_id, person_id, source, confidence, first_seen_sec,
+                    last_seen_sec, frame_count, snapshot_path)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                   ON CONFLICT(meeting_id, person_id) DO UPDATE SET
+                     source = CASE
+                         WHEN meeting_attendance.source = 'manual' THEN 'manual'
+                         ELSE excluded.source END,
+                     confidence = CASE
+                         WHEN meeting_attendance.confidence IS NULL THEN excluded.confidence
+                         WHEN excluded.confidence IS NULL THEN meeting_attendance.confidence
+                         WHEN excluded.confidence > meeting_attendance.confidence THEN excluded.confidence
+                         ELSE meeting_attendance.confidence END,
+                     first_seen_sec = CASE
+                         WHEN excluded.first_seen_sec IS NULL THEN meeting_attendance.first_seen_sec
+                         WHEN meeting_attendance.first_seen_sec IS NULL THEN excluded.first_seen_sec
+                         WHEN excluded.first_seen_sec < meeting_attendance.first_seen_sec THEN excluded.first_seen_sec
+                         ELSE meeting_attendance.first_seen_sec END,
+                     last_seen_sec = CASE
+                         WHEN excluded.last_seen_sec IS NULL THEN meeting_attendance.last_seen_sec
+                         WHEN meeting_attendance.last_seen_sec IS NULL THEN excluded.last_seen_sec
+                         WHEN excluded.last_seen_sec > meeting_attendance.last_seen_sec THEN excluded.last_seen_sec
+                         ELSE meeting_attendance.last_seen_sec END,
+                     frame_count = meeting_attendance.frame_count + 1,
+                     snapshot_path = COALESCE(excluded.snapshot_path, meeting_attendance.snapshot_path),
+                     updated_at = CURRENT_TIMESTAMP""",
+                (
+                    attendance_id,
+                    meeting_id,
+                    person_id,
+                    source,
+                    confidence,
+                    timestamp_sec,
+                    timestamp_sec,
+                    snapshot_path,
+                ),
+            )
+            row = conn.execute(
+                """SELECT ma.*, p.name AS person_name
+                   FROM meeting_attendance ma
+                   JOIN people p ON p.id = ma.person_id
+                   WHERE ma.meeting_id = ? AND ma.person_id = ?""",
+                (meeting_id, person_id),
+            ).fetchone()
+            conn.commit()
+        return dict(row)
+
+    def delete_attendance(self, meeting_id: str, person_id: str) -> bool:
+        with self.db.connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM meeting_attendance WHERE meeting_id = ? AND person_id = ?",
+                (meeting_id, person_id),
             )
             conn.commit()
         return cursor.rowcount > 0

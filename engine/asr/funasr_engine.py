@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
+from importlib import metadata as importlib_metadata
 from typing import Any
 
 import numpy as np
@@ -12,6 +14,89 @@ from .common import evaluate_audio_quality, filter_hallucinations, rms_is_silent
 from .contracts import ASRResult, ASRSegment, ASRWord, empty_asr_result, make_asr_result
 
 logger = logging.getLogger("ASR_Engine")
+_ROCM_FUNASR_WARNING_EMITTED = False
+_ROCM_UNSAFE_FUNASR_KINDS = {
+    "paraformer",
+    "paraformer_full",
+    "paraformer_large",
+    "paraformer_spk",
+    "paraformer_streaming",
+}
+_ROCM_KNOWN_STABLE_FUNASR_VERSIONS = {"1.4.1"}
+
+
+def _env_true(name: str) -> bool:
+    return str(os.environ.get(name, "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _torch_uses_rocm(torch_module: Any) -> bool:
+    return bool(getattr(getattr(torch_module, "version", None), "hip", None))
+
+
+def _installed_funasr_version() -> str | None:
+    try:
+        return importlib_metadata.version("funasr").split("+", 1)[0].strip()
+    except importlib_metadata.PackageNotFoundError:
+        return None
+    except Exception:
+        return "unknown"
+
+
+def _rocm_safe_funasr_versions() -> set[str]:
+    raw = os.environ.get("ASR_FUNASR_ROCM_SAFE_VERSIONS", "")
+    versions = {item.strip() for item in raw.split(",") if item.strip()}
+    return versions or set(_ROCM_KNOWN_STABLE_FUNASR_VERSIONS)
+
+
+def _warn_rocm_funasr_cpu_once() -> None:
+    global _ROCM_FUNASR_WARNING_EMITTED
+    if _ROCM_FUNASR_WARNING_EMITTED:
+        return
+    _ROCM_FUNASR_WARNING_EMITTED = True
+    logger.warning(
+        "[FunASR] 检测到 AMD ROCm PyTorch。Windows ROCm 下 FunASR GPU "
+        "加载可能触发 native 崩溃,默认改用 CPU。若确认当前驱动/模型稳定,"
+        "可设置 ASR_FUNASR_ALLOW_ROCM_GPU=true 强制使用 ROCm GPU。"
+    )
+
+
+def _windows_rocm_torch_available() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available() and _torch_uses_rocm(torch))
+    except Exception:
+        return False
+
+
+def rocm_windows_funasr_disabled_reason(kind: str) -> str | None:
+    kind = (kind or "").lower().strip().replace("-", "_")
+    if kind not in _ROCM_UNSAFE_FUNASR_KINDS:
+        return None
+    if _env_true("ASR_FUNASR_ALLOW_ROCM_PARAFORMER") or _env_true("ASR_FUNASR_ALLOW_ROCM_INPROCESS"):
+        return None
+    if not _windows_rocm_torch_available():
+        return None
+    funasr_version = _installed_funasr_version()
+    if funasr_version is None:
+        return None
+    if funasr_version in _rocm_safe_funasr_versions():
+        return None
+    return (
+        "检测到 Windows AMD ROCm PyTorch。当前默认禁止在主服务进程内加载 "
+        f"FunASR Paraformer 系模型({kind}),因为该路径可能触发 0xC0000005 "
+        "native 崩溃并直接退出服务。"
+        f"当前 funasr={funasr_version},已验证的稳定版本为 "
+        f"{', '.join(sorted(_rocm_safe_funasr_versions()))}。请重新运行一键安装修复依赖；"
+        "若只想强制实验,设置 ASR_FUNASR_ALLOW_ROCM_PARAFORMER=true 后重启。"
+    )
 
 
 class FunASREngine:
@@ -35,6 +120,9 @@ class FunASREngine:
         if self.initialized:
             return
         self.kind = kind.lower().strip().replace("-", "_")
+        disabled_reason = rocm_windows_funasr_disabled_reason(self.kind)
+        if disabled_reason:
+            raise RuntimeError(disabled_reason)
         from app.config import config
         self.config = config.audio
         self.sample_rate = config.audio.sample_rate
@@ -59,6 +147,9 @@ class FunASREngine:
             try:
                 import torch
                 if torch.cuda.is_available():
+                    if _torch_uses_rocm(torch) and not _env_true("ASR_FUNASR_ALLOW_ROCM_GPU"):
+                        _warn_rocm_funasr_cpu_once()
+                        return "cpu"
                     return "cuda:0"
                 if torch.backends.mps.is_available():
                     return "mps"
@@ -66,6 +157,13 @@ class FunASREngine:
                 pass
             return "cpu"
         if requested == "cuda":
+            try:
+                import torch
+                if torch.cuda.is_available() and _torch_uses_rocm(torch) and not _env_true("ASR_FUNASR_ALLOW_ROCM_GPU"):
+                    _warn_rocm_funasr_cpu_once()
+                    return "cpu"
+            except Exception:
+                pass
             return "cuda:0"
         return requested
 
@@ -100,6 +198,7 @@ class FunASREngine:
                     vad_model="fsmn-vad",
                     vad_kwargs={"max_single_segment_time": 30000},
                     device=self.device,
+                    disable_update=True,
                 )
             elif self.kind == "paraformer":
                 paraformer_kwargs = {
@@ -107,6 +206,7 @@ class FunASREngine:
                     "vad_model": "fsmn-vad",
                     "vad_kwargs": {"max_single_segment_time": 30000},
                     "device": self.device,
+                    "disable_update": True,
                 }
                 if (_os.environ.get("ASR_FUNASR_PUNC") or "").lower() in {"1", "true", "yes", "on"}:
                     paraformer_kwargs["punc_model"] = _os.environ.get("ASR_FUNASR_PUNC_MODEL", "ct-punc")
@@ -120,6 +220,7 @@ class FunASREngine:
                     punc_model="ct-punc",
                     vad_kwargs={"max_single_segment_time": 30000},
                     device=self.device,
+                    disable_update=True,
                 )
             elif self.kind == "paraformer_large":
                 self._model_name = "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
@@ -129,6 +230,7 @@ class FunASREngine:
                     punc_model="ct-punc",
                     vad_kwargs={"max_single_segment_time": 30000},
                     device=self.device,
+                    disable_update=True,
                 )
             elif self.kind == "paraformer_spk":
                 self._model_name = "paraformer-zh + fsmn-vad + ct-punc + cam++"
@@ -139,12 +241,14 @@ class FunASREngine:
                     spk_model="cam++",
                     vad_kwargs={"max_single_segment_time": 30000},
                     device=self.device,
+                    disable_update=True,
                 )
             elif self.kind == "paraformer_streaming":
                 self._model_name = "paraformer-zh-streaming"
                 self.model = AutoModel(
                     model="paraformer-zh-streaming",
                     device=self.device,
+                    disable_update=True,
                 )
             else:
                 raise ValueError(f"Unsupported FunASR kind: {self.kind}")

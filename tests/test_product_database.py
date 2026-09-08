@@ -8,7 +8,7 @@ from app.repositories.database import CURRENT_SCHEMA_VERSION, Database
 from app.repositories.jobs import JobRepository
 from app.repositories.meetings import MeetingRepository
 from app.repositories.people import PeopleRepository
-from app.repositories.people import DuplicateVoiceSampleError
+from app.repositories.people import DuplicateFaceSampleError, DuplicateVoiceSampleError
 
 
 @pytest.fixture()
@@ -33,9 +33,11 @@ def test_product_schema_contains_user_facing_entities(tmp_path):
         "processing_jobs",
         "people",
         "voice_samples",
+        "face_samples",
         "meeting_speakers",
         "transcript_segments",
         "meeting_notes",
+        "meeting_attendance",
     } <= tables
     assert "sessions" not in tables
     assert "segments" not in tables
@@ -158,6 +160,63 @@ def test_concurrent_duplicate_voice_samples_have_domain_error(product_repos, tmp
 
     assert len(successes) == 1
     assert len(duplicates) == 1
+
+
+def test_face_samples_and_attendance_are_persisted(product_repos, tmp_path):
+    meetings, _jobs, people = product_repos
+    person_id = people.create("张三")
+    meeting_id = meetings.create(source="live", title="晨会", status="processing")
+    image_path = tmp_path / "zhangsan.jpg"
+    image_path.write_bytes(b"jpeg-bytes")
+
+    sample_id = people.add_face_sample(
+        person_id,
+        image_path=str(image_path),
+        embedding=(b"\x00\x00\x80?" * 512),
+        embedding_dim=512,
+        model_name="insightface:buffalo_l",
+        detection_score=0.98,
+        image_sha256="same-photo",
+    )
+
+    person = people.get(person_id)
+    samples = people.matching_face_samples("insightface:buffalo_l", 512)
+    assert person["face_sample_count"] == 1
+    assert samples[0]["person_id"] == person_id
+    assert people.get_face_sample(person_id, sample_id)["image_path"] == str(image_path)
+
+    with pytest.raises(DuplicateFaceSampleError):
+        people.add_face_sample(
+            person_id,
+            image_path=str(tmp_path / "duplicate.jpg"),
+            embedding=(b"\x00\x00\x80?" * 512),
+            embedding_dim=512,
+            model_name="insightface:buffalo_l",
+            image_sha256="same-photo",
+        )
+
+    meetings.upsert_attendance(
+        meeting_id,
+        person_id,
+        source="face",
+        confidence=0.82,
+        timestamp_sec=3.0,
+    )
+    updated = meetings.upsert_attendance(
+        meeting_id,
+        person_id,
+        source="face",
+        confidence=0.91,
+        timestamp_sec=9.0,
+    )
+    assert updated["confidence"] == 0.91
+    assert updated["first_seen_sec"] == 3.0
+    assert updated["last_seen_sec"] == 9.0
+    assert updated["frame_count"] == 2
+
+    manual = meetings.upsert_attendance(meeting_id, person_id, source="manual")
+    assert manual["source"] == "manual"
+    assert meetings.detail(meeting_id)["attendance"][0]["person_name"] == "张三"
 
 
 def test_atomic_replacement_records_refined_manifest(product_repos):

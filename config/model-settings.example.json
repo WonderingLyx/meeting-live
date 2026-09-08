@@ -43,6 +43,17 @@
     "command": "",
     "device": "auto"
   },
+  "face": {
+    "provider": "insightface",
+    "endpoint": "file://./models/face/insightface",
+    "api_key": "",
+    "model": "buffalo_l",
+    "device": "auto",
+    "enabled": true,
+    "match_threshold": 0.55,
+    "match_margin": 0.08,
+    "frame_interval_sec": 5
+  },
   "llm": {
     "provider": "ollama",
     "endpoint": "http://127.0.0.1:11434/v1",
@@ -50,7 +61,7 @@
     "model": "qwen2.5:1.5b",
     "enabled": false,
     "allow_public": false,
-    "timeout_sec": 60,
+    "timeout_sec": 200,
     "max_input_tokens": 8000,
     "mock": false
   }

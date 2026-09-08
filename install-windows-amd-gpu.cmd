@@ -1,6 +1,11 @@
 @echo off
 setlocal
 set "ROOT=%~dp0"
+echo %* | findstr /I /C:"-Profile" >nul
+if "%ERRORLEVEL%"=="0" (
+  echo install-windows-amd-gpu.cmd always installs the AMD ROCm profile. Do not pass -Profile.
+  exit /b 2
+)
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\install-windows.ps1" -Profile AmdRocm %*
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (

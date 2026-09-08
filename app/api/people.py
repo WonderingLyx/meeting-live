@@ -71,6 +71,7 @@ def get_person(person_id: str, request: Request):
     if person is None:
         raise HTTPException(status_code=404, detail="人物不存在")
     person["samples"] = request.app.state.people_repo.list_samples(person_id)
+    person["face_samples"] = request.app.state.people_repo.list_face_samples(person_id)
     return person
 
 
@@ -87,7 +88,7 @@ def update_person(person_id: str, body: PersonBody, request: Request):
 def delete_person(person_id: str, request: Request):
     if not request.app.state.people_repo.delete(person_id):
         raise HTTPException(status_code=404, detail="人物不存在")
-    return {"message": "人物和本地声音样本已删除"}
+    return {"message": "人物和本地媒体样本已删除"}
 
 
 @router.get("/{person_id}/samples/{sample_id}/audio")

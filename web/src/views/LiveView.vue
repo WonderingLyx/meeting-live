@@ -9,6 +9,7 @@ import { fmtClock } from '../utils/format'
 import { getModels, type ModelsInfo } from '../api/engines'
 import SpeakerLabel from '../components/SpeakerLabel.vue'
 import EmText from '../components/EmText.vue'
+import FaceAttendanceWidget from '../components/FaceAttendanceWidget.vue'
 
 const { t } = useI18n()
 const live = useLiveStore()
@@ -170,6 +171,12 @@ onMounted(loadModels)
             <!-- SPA v3: 删除 LiveView 顶栏的 "注册声纹" 按钮 (注册声纹是声纹库操作, 不该在实时页) -->
           </div>
         </div>
+        <FaceAttendanceWidget
+          v-if="live.rec || live.sessionId"
+          :meeting-id="live.sessionId"
+          :timestamp-sec="live.recTimer"
+          compact
+        />
         <div class="h-mono" style="margin-bottom: 14px">
           <span>{{ t('view.live.transcript.label') }}</span>
           <span class="amber" style="text-transform: none; letter-spacing: 0; margin-left: 8px">

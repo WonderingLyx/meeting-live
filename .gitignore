@@ -9,6 +9,12 @@ develop-eggs/
 dist/
 dist-packages/
 downloads/
+.download-cache/
+.pytest-tmp/
+.runtime/
+offline/python/*.exe
+offline/python/*.nupkg
+offline/python/*.zip
 eggs/
 .eggs/
 lib/

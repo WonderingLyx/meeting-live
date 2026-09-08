@@ -4,6 +4,7 @@ import importlib.metadata
 from app.runtime import (
     ApplicationRuntime,
     InferenceCoordinator,
+    LazyRuntimeEngine,
     diagnose_audio_dependencies,
 )
 
@@ -197,6 +198,47 @@ def test_runtime_close_releases_engine_hooks_once():
 
     assert asr.calls == 1
     assert speaker.calls == 1
+
+
+def test_lazy_runtime_engine_loads_only_on_first_use():
+    class Engine:
+        device = "cpu"
+
+        def __init__(self):
+            self.initialized = True
+
+        def ping(self):
+            return "pong"
+
+    calls = []
+    lazy = LazyRuntimeEngine(
+        "test",
+        lambda: calls.append("load") or Engine(),
+        engine_type_getter=lambda: "dummy",
+        model_getter=lambda: "dummy-model",
+        device_getter=lambda: "cpu",
+    )
+
+    assert calls == []
+    assert lazy.loaded is False
+    assert lazy.kind == "dummy"
+    assert lazy._model_name == "dummy-model"
+    assert lazy.device == "cpu"
+    assert calls == []
+
+    assert lazy.ping() == "pong"
+    assert lazy.ping() == "pong"
+    assert calls == ["load"]
+    assert lazy.loaded is True
+
+
+def test_lazy_runtime_engine_close_does_not_load():
+    calls = []
+    lazy = LazyRuntimeEngine("test", lambda: calls.append("load") or object())
+
+    lazy.close()
+
+    assert calls == []
 
 
 def test_slot_watchdog_marks_leak_after_threshold(monkeypatch):

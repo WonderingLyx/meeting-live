@@ -1,7 +1,12 @@
 @echo off
 setlocal
 set "ROOT=%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\install-windows.ps1" %*
+echo %* | findstr /I /C:"-Profile" >nul
+if "%ERRORLEVEL%"=="0" (
+  echo install-windows.cmd is CPU-only. Use install-windows-amd-gpu.cmd or install-windows-nvidia-gpu.cmd for GPU installs.
+  exit /b 2
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\install-windows.ps1" -Profile Cpu %*
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
   echo.

@@ -124,7 +124,7 @@ LLM_MODEL=gpt-4o-mini
 | `LLM_ENDPOINT` | `http://127.0.0.1:11434/v1` | OpenAI 兼容接口地址 |
 | `LLM_MODEL` | `qwen2.5:1.5b` | 模型名 |
 | `LLM_API_KEY` | (空) | Bearer token,公网 OpenAI 等需要 |
-| `LLM_TIMEOUT_SEC` | `60` | 单次请求超时 |
+| `LLM_TIMEOUT_SEC` | `200` | 单次请求超时 |
 | `LLM_MAX_INPUT_TOKENS` | `8000` | 输入上限(超长截断) |
 | `LLM_MOCK` | `false` | mock 模式,返回固定文本不真调 LLM |
 | `LLM_ALLOW_PUBLIC` | `false` | **安全开关**:允许公网 endpoint,默认拒绝 |
@@ -171,7 +171,7 @@ LLM_MODEL=gpt-4o-mini
 - OpenAI: model 名拼写错,或账户无访问权限
 
 **`504 timeout`**：
-- 模型太大,改小或加 `LLM_TIMEOUT_SEC=120`
+- 模型太大,改小或加大 `LLM_TIMEOUT_SEC`；默认已调到 `200`
 
 **`401 unauthorized`**：
 - `LLM_API_KEY` 没配或配错

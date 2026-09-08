@@ -8,39 +8,12 @@
 
 ## 当前可用
 
-### ASR: Qwen3-ASR-0.6B（默认）
-- **来源**: ModelScope `Qwen/Qwen3-ASR-0.6B`
-- **大小**: 1.8GB
-- **设备**: MPS / CUDA / CPU(默认 auto,mps 优先,90s 超时回退)
-- **能力**: 多语种(中英日韩等)、50+ 语言识别、自动语言检测、长音频(分段)
-- **可选**: Qwen3-ForcedAligner-0.6B(600MB),给字级时间戳用,`ASR_WORD_TIMESTAMPS=true` 启用
-  - **开启后效果**:
-    - 实时响应和 SQLite 会议文稿可保存 `words: [{text, start, end}]`
-    - SRT/VTT 字幕按字切分(0.3s/字 vs 默认 3s/段),适合视频剪辑/卡拉 OK
-    - 会议详情和字幕导出可使用更精确的时间
-  - **代价**:
-    - 首次启动多下载 600MB 模型(国内需 HF 镜像)
-    - ASR 加载多 5-10s(MPS 上偶发死锁,90s 超时回退 CPU)
-    - 每次推理多 50-200ms(对齐计算)
-  - **推荐**: 个人学习保持 false(轻量);需要精确字幕/视频剪辑场景开 true
-- **优点**: 中文识别极强,SOTA 表现,社区活跃
-- **缺点**: 体积较大,低端机器加载慢;HF 镜像依赖
-
-> 能力边界：word timestamps / 字级时间戳当前只在 Qwen3-ASR + `ASR_WORD_TIMESTAMPS=true` 路径可用。说话人识别不是 Qwen3-ASR 自带能力,由声纹引擎或上传离线 pyannote 负责。
-
-### 声纹: 3D-Speaker / ModelScope Speaker Verification
-- **来源**: ModelScope `damo/speech_campplus_sv_zh-cn_16k-common`、`iic/speech_eres2net_large_sv_zh-cn_3dspeaker_16k` 等
-- **大小**: 6-23M 参数级别,首次切换到未缓存模型时自动下载
-- **能力**: 说话人识别(谁在说话)、声纹库累积、cosine 距离比对
-- **切换**: `SPEAKER_ENGINE=campplus|campplus_cn_en|eres2net|eres2net_base|eres2net_large|ecapa_tdnn|wespeaker` 或设置页运行时可切
-- **推荐顺序**: 中文会议先测 `campplus`,中英混合测 `campplus_cn_en`,离线质量对照测 `eres2net_large`,基线对照测 `ecapa_tdnn` / `wespeaker`
-- **embedding_dim / model_id**: 不同模型的 embedding 空间不同。项目会把模型 id、revision、维度和归一化方式写入 voice sample,切引擎后旧样本保留但不会跨模型误匹配。
-
-### ASR: SenseVoice / Paraformer / Paraformer Streaming
+### ASR: SenseVoice / Paraformer / Paraformer Streaming（默认 SenseVoice Chinese）
 - **来源**: ModelScope / FunASR
-- **依赖**: `funasr>=1.2.0`
+- **依赖**: `funasr==1.4.1`（Windows ROCm 已验证版本）
 - **切换**: 设置页或 `PUT /v1/asr/engine`
 - **行为**: 新 ASR 下载/加载完成前继续使用旧 ASR;加载失败不会影响当前引擎
+- **启动降级**: 默认 `ASR_STARTUP_ALLOW_DOWNLOAD=false`,启动时不会因为 Qwen 未缓存而阻塞,会优先尝试 `sensevoice_zh,paraformer_full,paraformer`
 - **能力来源**: 后端 `/v1/models` 返回,可通过 `ASR_CAPABILITIES_JSON` / `ASR_CAPABILITIES_FILE` 配置覆盖
 - **适用**:
   - SenseVoice Chinese (`sensevoice_zh`): 中文固定语言快速转写,中文会议优先测试
@@ -55,6 +28,34 @@
   - `paraformer_spk` 的 speaker 标签来自 FunASR 当前音频块,不替代项目的 pyannote 分离或注册声纹身份识别
   - Paraformer Streaming 表示模型适合流式/低延迟场景,但当前服务端展示不是 token-level 真流式逐 token 输出
   - 切换 ASR 只改变转写模型,不会改变说话人识别算法;实时说话人由 Speaker Engine 完成,上传离线 diarization 可走 pyannote
+
+### ASR: Qwen3-ASR-0.6B（高质量可选）
+- **来源**: Hugging Face `Qwen/Qwen3-ASR-0.6B`
+- **大小**: 1.8GB
+- **设备**: MPS / CUDA / CPU(默认 auto,mps 优先,90s 超时回退)
+- **能力**: 多语种(中英日韩等)、50+ 语言识别、自动语言检测、长音频(分段)
+- **可选**: Qwen3-ForcedAligner-0.6B(600MB),给字级时间戳用,`ASR_WORD_TIMESTAMPS=true` 启用
+  - **开启后效果**:
+    - 实时响应和 SQLite 会议文稿可保存 `words: [{text, start, end}]`
+    - SRT/VTT 字幕按字切分(0.3s/字 vs 默认 3s/段),适合视频剪辑/卡拉 OK
+    - 会议详情和字幕导出可使用更精确的时间
+  - **代价**:
+    - 首次启动多下载 600MB 模型(国内需 HF 镜像)
+    - ASR 加载多 5-10s(MPS 上偶发死锁,90s 超时回退 CPU)
+    - 每次推理多 50-200ms(对齐计算)
+  - **推荐**: 个人学习保持 false(轻量);需要精确字幕/视频剪辑场景开 true
+- **优点**: 中文识别强,适合做质量对照
+- **缺点**: 体积较大,低端机器加载慢;HF 镜像依赖
+
+> 能力边界：word timestamps / 字级时间戳当前只在 Qwen3-ASR + `ASR_WORD_TIMESTAMPS=true` 路径可用。说话人识别不是 Qwen3-ASR 自带能力,由声纹引擎或上传离线 pyannote 负责。Qwen 模型依赖 Hugging Face/镜像访问,不再作为 Windows 一键包默认启动模型。
+
+### 声纹: 3D-Speaker / ModelScope Speaker Verification
+- **来源**: ModelScope `damo/speech_campplus_sv_zh-cn_16k-common`、`iic/speech_eres2net_large_sv_zh-cn_3dspeaker_16k` 等
+- **大小**: 6-23M 参数级别,首次切换到未缓存模型时自动下载
+- **能力**: 说话人识别(谁在说话)、声纹库累积、cosine 距离比对
+- **切换**: `SPEAKER_ENGINE=campplus|campplus_cn_en|eres2net|eres2net_base|eres2net_large|ecapa_tdnn|wespeaker` 或设置页运行时可切
+- **推荐顺序**: 中文会议先测 `campplus`,中英混合测 `campplus_cn_en`,离线质量对照测 `eres2net_large`,基线对照测 `ecapa_tdnn` / `wespeaker`
+- **embedding_dim / model_id**: 不同模型的 embedding 空间不同。项目会把模型 id、revision、维度和归一化方式写入 voice sample,切引擎后旧样本保留但不会跨模型误匹配。
 
 ### VAD: Silero VAD
 - **来源**: torch.hub `snakers4/silero-vad`
@@ -74,9 +75,9 @@
 - **缺点**:
   - **不支持流式**:SenseVoice 是非自回归,完整段输入才能识别(WebSocket 实时场景不适用)
   - **中文方言仅普通话 + 粤语**:`labels` 字段 50+ 语言是指"语种",不是"方言"。粤语/闽南语/上海话等不支持
-  - **中文表现通常弱于 Qwen3-ASR-0.6B**:适合轻量部署,高质量中文转写仍建议优先使用默认 Qwen3-ASR
+  - **中文表现通常弱于 Qwen3-ASR-0.6B**:适合轻量部署,高质量中文转写可手动切换 Qwen3-ASR 对照
   - **声学事件 + 情感不是本项目目标**:多任务反而拖慢主任务
-- **结论**: 已作为可选 ASR 集成,适合"批量处理短音频 + 多语种"场景;默认仍保留 Qwen3-ASR。
+- **结论**: 已作为默认 ASR 集成,适合"批量处理短音频 + 多语种"场景;Qwen3-ASR 保留为高质量可选项。
 
 ### ZipEnhancer (speech_zipenhancer_ans_multiloss_16k_base)
 - **大小**: 2.04M 参数(约 8MB,极小)
@@ -120,7 +121,18 @@
 
 仓库的 MIT License 只覆盖项目代码，不覆盖 Qwen、FunASR、pyannote、CamPlus、ERes2Net、Wespeaker、Silero 或其他模型权重。模型可能有独立许可证、访问授权和使用限制，部署者必须在下载页面核对当前条款。
 
-默认 ASR、对齐、VAD、说话人分离和声纹模型均固定了 revision；可通过 `.env.example` 中对应变量显式覆盖。复现实验仍应记录模型仓库、revision、缓存文件哈希、Python 环境和硬件；不要把模型缓存作为项目代码重新分发。ModelScope 模型可能加载上游自定义代码，只应使用已审核来源并在低权限隔离环境运行。
+Qwen ASR / ForcedAligner、pyannote Community-1、Silero VAD 和 ModelScope 声纹引擎使用固定 revision 或固定仓库版本；可通过 `.env.example` 中对应变量显式覆盖。FunASR 的内置别名模型（例如 `paraformer-zh`、`fsmn-vad`、`ct-punc`、`cam++`）由 FunASR/ModelScope 内部解析，本项目通过 `funasr==1.4.1`、`disable_update=True` 和 Windows ROCm 版本保护降低漂移风险。复现实验仍应记录模型仓库、revision、缓存文件哈希、Python 环境和硬件；不要把模型缓存作为项目代码重新分发。ModelScope 模型可能加载上游自定义代码，只应使用已审核来源并在低权限隔离环境运行。
+
+### 版本漂移检查
+
+| 能力 | 当前保护 | 剩余风险 |
+|---|---|---|
+| Qwen3 ASR / ForcedAligner | 代码固定 Hugging Face revision；`qwen-asr==0.0.6` | 首次下载仍依赖 HF/镜像；未缓存时启动不会阻塞，会降级到本地 FunASR 候选 |
+| FunASR SenseVoice / Paraformer ASR | `funasr==1.4.1`；`disable_update=True`；Windows ROCm 对 Paraformer 系做安全版本拦截 | FunASR 内置别名模型不是显式 revision，需保留安装包依赖固定 |
+| 上传会议 FunASR 说话人分离 | 同 ASR 的 FunASR 版本保护；Paraformer 系分离在不安全版本下标记不可用并停止加载 | SenseVoice + CAM++ 仍保留为对照路径；效果需按真实会议样本评估 |
+| pyannote diarization | `pyannote.audio==4.0.4`；Community-1 固定 revision | Hugging Face gated 模型仍需账号授权和 `HF_TOKEN` |
+| 声纹识别 | 每个 ModelScope speaker engine 固定 `model_revision`，样本按 model id/revision/维度隔离 | 用户自定义 revision 会产生新的声纹空间，旧样本不会跨模型误匹配 |
+| 人脸签到 | `insightface==1.0.1`；安装脚本固定 ONNXRuntime/OpenCV/Pillow/scikit-image 版本 | InsightFace 模型包首次下载后本地缓存；发布包默认不再分发上游权重 |
 
 ### 模型许可与联网矩阵
 

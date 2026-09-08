@@ -17,6 +17,10 @@ class DuplicateVoiceSampleError(ValueError):
     """The same decoded voice content is already enrolled for this person."""
 
 
+class DuplicateFaceSampleError(ValueError):
+    """The same face image content is already enrolled for this person."""
+
+
 class PeopleRepository:
     def __init__(self, db: Database):
         self.db = db
@@ -37,6 +41,8 @@ class PeopleRepository:
                 """SELECT p.*,
                           (SELECT COUNT(*) FROM voice_samples vs
                            WHERE vs.person_id = p.id) AS sample_count,
+                          (SELECT COUNT(*) FROM face_samples fs
+                           WHERE fs.person_id = p.id) AS face_sample_count,
                           COALESCE((SELECT SUM(vs.duration_sec) FROM voice_samples vs
                                     WHERE vs.person_id = p.id), 0.0)
                               AS total_sample_duration,
@@ -53,6 +59,8 @@ class PeopleRepository:
                 """SELECT p.*,
                           (SELECT COUNT(*) FROM voice_samples vs
                            WHERE vs.person_id = p.id) AS sample_count,
+                          (SELECT COUNT(*) FROM face_samples fs
+                           WHERE fs.person_id = p.id) AS face_sample_count,
                           COALESCE((SELECT SUM(vs.duration_sec) FROM voice_samples vs
                                     WHERE vs.person_id = p.id), 0.0)
                               AS total_sample_duration,
@@ -80,6 +88,12 @@ class PeopleRepository:
                     (person_id,),
                 ).fetchall()
             ]
+            paths.extend(
+                row[0] for row in conn.execute(
+                    "SELECT image_path FROM face_samples WHERE person_id = ?",
+                    (person_id,),
+                ).fetchall()
+            )
             # 删 person 前,FK ON DELETE SET NULL 只置空 person_id,会留下
             # manually_confirmed=1 / identity_status='confirmed' 的矛盾行。
             # 主动复位这些字段到匿名状态,与"未关联人"语义一致。
@@ -101,7 +115,7 @@ class PeopleRepository:
             try:
                 Path(path).unlink(missing_ok=True)
             except Exception:
-                logger.warning("[People] 删除声样文件失败: %s", path)
+                logger.warning("[People] 删除人物媒体文件失败: %s", path)
         return cursor.rowcount > 0
 
     def add_sample(
@@ -233,4 +247,112 @@ class PeopleRepository:
             return conn.execute(
                 "SELECT 1 FROM voice_samples WHERE person_id = ? AND audio_sha256 = ?",
                 (person_id, audio_sha256),
+            ).fetchone() is not None
+
+    def add_face_sample(
+        self,
+        person_id: str,
+        *,
+        image_path: str,
+        embedding: bytes,
+        embedding_dim: int,
+        model_name: str,
+        detection_score: float | None = None,
+        image_sha256: str | None = None,
+    ) -> str:
+        sample_id = str(uuid.uuid4())
+        with self.db.connect() as conn:
+            if conn.execute(
+                "SELECT 1 FROM people WHERE id = ?", (person_id,)
+            ).fetchone() is None:
+                raise ValueError("person not found")
+            try:
+                conn.execute(
+                    """INSERT INTO face_samples
+                       (id, person_id, image_path, embedding, embedding_dim,
+                        model_name, detection_score, image_sha256)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        sample_id,
+                        person_id,
+                        image_path,
+                        embedding,
+                        embedding_dim,
+                        model_name,
+                        detection_score,
+                        image_sha256,
+                    ),
+                )
+                conn.commit()
+            except sqlite3.IntegrityError as exc:
+                if (
+                    image_sha256
+                    and "face_samples.person_id, face_samples.image_sha256" in str(exc)
+                ):
+                    raise DuplicateFaceSampleError(
+                        "duplicate face sample for person"
+                    ) from exc
+                raise
+        return sample_id
+
+    def list_face_samples(self, person_id: str) -> list[dict]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """SELECT id, person_id, embedding_dim, model_name,
+                          detection_score, created_at
+                   FROM face_samples
+                   WHERE person_id = ?
+                   ORDER BY created_at DESC""",
+                (person_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_face_sample(self, person_id: str, sample_id: str) -> Optional[dict]:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """SELECT id, person_id, image_path, embedding_dim, model_name,
+                          detection_score, created_at
+                   FROM face_samples
+                   WHERE id = ? AND person_id = ?""",
+                (sample_id, person_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def delete_face_sample(self, person_id: str, sample_id: str) -> bool:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT image_path FROM face_samples WHERE id = ? AND person_id = ?",
+                (sample_id, person_id),
+            ).fetchone()
+            if row is None:
+                return False
+            cursor = conn.execute(
+                "DELETE FROM face_samples WHERE id = ? AND person_id = ?",
+                (sample_id, person_id),
+            )
+            conn.commit()
+        try:
+            Path(row["image_path"]).unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning("[people] 删除人脸样本失败 %s: %s", row["image_path"], exc)
+        return cursor.rowcount > 0
+
+    def matching_face_samples(self, model_name: str, embedding_dim: int) -> list[dict]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """SELECT fs.person_id, p.name, fs.embedding, fs.embedding_dim,
+                          fs.model_name, fs.detection_score
+                   FROM face_samples fs JOIN people p ON p.id = fs.person_id
+                   WHERE fs.embedding IS NOT NULL
+                     AND fs.embedding_dim = ?
+                     AND fs.model_name = ?""",
+                (embedding_dim, model_name),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def has_face_sample_hash(self, person_id: str, image_sha256: str) -> bool:
+        with self.db.connect() as conn:
+            return conn.execute(
+                "SELECT 1 FROM face_samples WHERE person_id = ? AND image_sha256 = ?",
+                (person_id, image_sha256),
             ).fetchone() is not None
