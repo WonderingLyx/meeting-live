@@ -174,7 +174,7 @@ Content-Type: application/json
 测试单个音频文件，不创建会议：
 
 ```powershell
-curl.exe -F "engine_type=plugin:faster_whisper_large_v3" -F "file=@sample.wav" http://127.0.0.1:8000/v1/asr/test
+curl.exe -F "engine_type=plugin:faster_whisper_large_v3" -F "file=@sample.wav" http://127.0.0.1:8321/v1/asr/test
 ```
 
 设置页也增加了“ASR 样本测试”面板。它会调用 `/v1/asr/test`，用于先比较插件效果，再决定是否切换会议使用的 ASR。

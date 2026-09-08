@@ -6,7 +6,17 @@ from typing import BinaryIO
 import numpy as np
 
 
-ALLOWED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".wma"}
+ALLOWED_AUDIO_EXTENSIONS = {
+    ".wav",
+    ".mp3",
+    ".m4a",
+    ".mp4",
+    ".webm",
+    ".flac",
+    ".ogg",
+    ".aac",
+    ".wma",
+}
 UPLOAD_READ_SIZE = 1024 * 1024
 
 

@@ -87,7 +87,7 @@ After the script finishes:
 .\.venv-rocm-win\Scripts\python.exe main.py
 ```
 
-Then open `http://127.0.0.1:8000/settings` and check that the ASR device panel shows ROCm and `ASR_DEVICE=cuda`.
+Then open `http://127.0.0.1:8321/settings` and check that the ASR device panel shows ROCm and `ASR_DEVICE=cuda`.
 
 ### pyannote MIOpenDropoutHIP on Windows ROCm
 
@@ -194,7 +194,7 @@ Recommended AMD GPU ASR settings:
 
 ```env
 HOST=127.0.0.1
-PORT=8000
+PORT=8321
 WORKERS=1
 ASR_ENGINE=sensevoice_zh
 ASR_DEVICE=cuda
@@ -210,7 +210,7 @@ SPEAKER_ENGINE=campplus
 
 `ASR_FUNASR_ALLOW_ROCM_GPU=false` means FunASR ASR/diarization models use CPU on Windows ROCm by default. `ASR_FUNASR_ALLOW_ROCM_PARAFORMER=false` only blocks Paraformer-family FunASR models when the installed FunASR version is outside `ASR_FUNASR_ROCM_SAFE_VERSIONS`. The 2026-08-13 AMD test log loaded the Paraformer/CAM++ stack successfully with `funasr==1.4.1`; `funasr==1.4.13` crashed after `ckpt:` with process exit `-1073741819` / `0xC0000005`. Rerun the installer to downgrade FunASR if the settings page reports this version guard.
 
-If port `8000` is occupied, change `PORT` to another free port such as `8001`.
+If port `8321` is occupied, change `PORT` to another free port such as `8322`.
 The Windows launcher reads `HOST`, `PORT`, and `ENABLE_HTTPS` from `.env` when opening the browser.
 
 For pyannote diarization, also set `HF_TOKEN` after accepting the model terms on Hugging Face.
@@ -225,7 +225,7 @@ python main.py
 Open:
 
 ```text
-http://127.0.0.1:8000/settings
+http://127.0.0.1:8321/settings
 ```
 
 On the settings page, the ASR device area should show ROCm, the Radeon GPU name, and `ASR_DEVICE=cuda`. Use the CPU/GPU buttons there to switch devices without manually editing `.env`.

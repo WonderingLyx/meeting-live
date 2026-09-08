@@ -13,7 +13,7 @@ function toWsUrl(httpUrl: string) {
 // prod: vite build 到 web/dist/, FastAPI 静态 mount + SPA catch-all。
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, __dirname, '')
-  const backendUrl = (env.VITE_BACKEND_URL || 'http://127.0.0.1:8000').replace(/\/$/, '')
+  const backendUrl = (env.VITE_BACKEND_URL || 'http://127.0.0.1:8321').replace(/\/$/, '')
   const backendWs = (env.VITE_BACKEND_WS || toWsUrl(backendUrl)).replace(/\/$/, '')
   const devPort = Number(env.VITE_DEV_SERVER_PORT || 5173)
 

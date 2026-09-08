@@ -103,7 +103,7 @@ def get_env_str_list(key: str, default: tuple = ()) -> tuple:
 class ServerConfig:
     """服务器配置"""
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8321
     workers: int = 1  # 单进程防止 GPU 内存溢出
     debug: bool = False
     enable_https: bool = False  # 声明服务是否经 HTTPS 反代/uvicorn ssl 暴露
@@ -112,7 +112,7 @@ class ServerConfig:
     def from_env(cls) -> "ServerConfig":
         return cls(
             host=get_env_str("HOST", "127.0.0.1"),
-            port=get_env_int("PORT", 8000),
+            port=get_env_int("PORT", 8321),
             workers=get_env_int("WORKERS", 1),
             debug=get_env_bool("DEBUG", False),
             enable_https=get_env_bool("ENABLE_HTTPS", False),
@@ -441,6 +441,8 @@ class ModelsConfig:
 class CORSConfig:
     """Browser origins allowed to call the local API."""
     allowed_origins: tuple[str, ...] = (
+        "http://127.0.0.1:8321",
+        "http://localhost:8321",
         "http://127.0.0.1:8000",
         "http://localhost:8000",
         "http://127.0.0.1:5173",

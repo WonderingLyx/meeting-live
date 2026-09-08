@@ -25,7 +25,7 @@ JWT_SECRET=<至少 32 字节随机>
 ALLOWED_ORIGINS=https://matrix.example.internal
 ```
 
-把服务放到 HTTPS 反向代理和防火墙之后。不要把 8000 端口直接暴露到互联网。保持 `WORKERS=1`；推理引擎和进程内 job runner 按单进程设计。
+把服务放到 HTTPS 反向代理和防火墙之后。不要把 8321 端口直接暴露到互联网。保持 `WORKERS=1`；推理引擎和进程内 job runner 按单进程设计。
 
 ## 敏感材料
 

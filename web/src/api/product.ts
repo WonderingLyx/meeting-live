@@ -101,8 +101,13 @@ export async function getMeetingAudioUrl(id:string) {
 }
 export async function uploadMeeting(file:File, mode:'quick'|'meeting', onProgress?:(n:number)=>void) {
   const data = new FormData(); data.append('file',file,file.name||'upload.wav')
-  const response = await apiClient.post(`/v1/meetings/upload?mode=${mode}`, data, {timeout:0,onUploadProgress:e=>onProgress?.(e.total ? Math.round(e.loaded/e.total*100):0)})
-  return response.data as {meeting_id:string;job_id:string}
+  return call<{meeting_id:string;job_id:string}>({
+    method:'POST',
+    url:`/v1/meetings/upload?mode=${mode}`,
+    data,
+    timeout:0,
+    onUploadProgress:e=>onProgress?.(e.total ? Math.round(e.loaded/e.total*100):0),
+  })
 }
 export async function uploadVoiceSample(personId:string,file:File):Promise<VoiceSampleUploadResult> { const data=new FormData();data.append('file',file,file.name||'voice-sample.wav');return (await apiClient.post(`/v1/people/${personId}/samples`,data,{timeout:0})).data }
 export async function uploadFaceSample(personId:string,file:File):Promise<FaceSampleUploadResult> { const data=new FormData();data.append('file',file,file.name||'face-sample.jpg');return (await apiClient.post(`/v1/people/${personId}/face-samples`,data,{timeout:0})).data }

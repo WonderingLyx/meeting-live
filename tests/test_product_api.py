@@ -253,6 +253,52 @@ def test_upload_immediately_creates_durable_job(tmp_path, monkeypatch):
     assert job["status"] == "queued"
 
 
+@pytest.mark.parametrize(
+    ("filename", "content_type"),
+    [
+        ("planning.mp4", "video/mp4"),
+        ("planning.webm", "audio/webm"),
+    ],
+)
+def test_upload_accepts_browser_audio_container_extensions(
+    tmp_path, monkeypatch, filename, content_type
+):
+    from app.api import meetings as meetings_api
+
+    client, app = make_client(tmp_path)
+    monkeypatch.setattr(meetings_api.config.storage, "media_dir", str(tmp_path / "media"))
+
+    response = client.post(
+        "/v1/meetings/upload?mode=meeting",
+        files={"file": (filename, valid_wav_bytes(), content_type)},
+    )
+
+    assert response.status_code == 202
+    meeting = app.state.meeting_repo.get(response.json()["meeting_id"])
+    assert meeting["original_filename"] == filename
+    assert Path(meeting["audio_path"]).suffix == Path(filename).suffix
+
+
+def test_upload_returns_validation_detail_for_duration_limit(tmp_path, monkeypatch):
+    from app.api import meetings as meetings_api
+
+    client, _app = make_client(tmp_path)
+    monkeypatch.setattr(meetings_api.config.storage, "media_dir", str(tmp_path / "media"))
+    monkeypatch.setattr(
+        meetings_api,
+        "validate_audio_file",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("音频超过 3600 秒限制")),
+    )
+
+    response = client.post(
+        "/v1/meetings/upload?mode=meeting",
+        files={"file": ("long.wav", valid_wav_bytes(), "audio/wav")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "音频超过 3600 秒限制"
+
+
 def test_upload_removes_meeting_and_audio_when_job_creation_fails(tmp_path, monkeypatch):
     from app.api import meetings as meetings_api
 

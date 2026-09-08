@@ -1523,8 +1523,7 @@ function Set-EnvFileValue($Path, $Key, $Value) {
         $lines = Get-Content -LiteralPath $Path -Encoding UTF8
     }
     $seen = $false
-    $out = New-Object System.Collections.ArrayList
-    foreach ($line in $lines) {
+    $out = foreach ($line in $lines) {
         if ($line -match "^\s*$([regex]::Escape($Key))\s*=") {
             $seen = $true
             "$Key=$Value"
@@ -1536,6 +1535,24 @@ function Set-EnvFileValue($Path, $Key, $Value) {
         $out += "$Key=$Value"
     }
     Set-Content -LiteralPath $Path -Value $out -Encoding UTF8
+}
+
+function Test-EnvFileKey($Path, $Key) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+    foreach ($line in (Get-Content -LiteralPath $Path -Encoding UTF8)) {
+        if ($line -match "^\s*$([regex]::Escape($Key))\s*=") {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Set-EnvFileValueIfMissing($Path, $Key, $Value) {
+    if (-not (Test-EnvFileKey $Path $Key)) {
+        Set-EnvFileValue $Path $Key $Value
+    }
 }
 
 function Repair-EnvSecretPlaceholders($Path) {
@@ -1594,6 +1611,7 @@ function Ensure-EnvConfig([string]$Device = "cpu", [string]$AsrEngine = "sensevo
         Copy-Item -LiteralPath ".env.example" -Destination ".env"
     }
     Repair-EnvSecretPlaceholders ".env"
+    Set-EnvFileValueIfMissing ".env" "PORT" "8321"
     Set-EnvFileValue ".env" "MODELS_DIR" "./models"
     Set-EnvFileValue ".env" "HF_HOME" "./models/huggingface"
     Set-EnvFileValue ".env" "HF_HUB_CACHE" "./models/huggingface/hub"
@@ -1874,12 +1892,12 @@ function Get-StartUrl {
         return `$Url
     }
     `$hostValue = (Get-EnvFileValue "HOST" "127.0.0.1").Trim()
-    `$portValue = (Get-EnvFileValue "PORT" "8000").Trim()
+    `$portValue = (Get-EnvFileValue "PORT" "8321").Trim()
     `$httpsValue = (Get-EnvFileValue "ENABLE_HTTPS" "false").Trim().ToLowerInvariant()
-    `$portNumber = 8000
+    `$portNumber = 8321
     if (-not [int]::TryParse(`$portValue, [ref]`$portNumber) -or `$portNumber -le 0 -or `$portNumber -gt 65535) {
-        Write-Warning "Invalid PORT=`$portValue in .env; falling back to 8000."
-        `$portNumber = 8000
+        Write-Warning "Invalid PORT=`$portValue in .env; falling back to 8321."
+        `$portNumber = 8321
     }
     if (-not `$hostValue -or `$hostValue -eq "0.0.0.0" -or `$hostValue -eq "::" -or `$hostValue -eq "*") {
         `$hostValue = "127.0.0.1"
@@ -1922,7 +1940,7 @@ function Get-PortFromUrl([string]`$TargetUrl) {
         `$uri = [Uri]`$TargetUrl
         return `$uri.Port
     } catch {
-        return 8000
+        return 8321
     }
 }
 
@@ -2109,7 +2127,7 @@ try {
         Write-Host ""
         Write-Host "Installation complete." -ForegroundColor Green
         Write-Host "Start command: powershell -NoProfile -ExecutionPolicy Bypass -File .\start-windows.ps1"
-        Write-Host "Open: http://127.0.0.1:8000"
+        Write-Host "Open: http://127.0.0.1:8321"
 
         if ($StartServer) {
             Write-Step "Starting server"
@@ -2157,7 +2175,7 @@ try {
     Write-Host ""
     Write-Host "Installation complete." -ForegroundColor Green
     Write-Host "Start command: powershell -NoProfile -ExecutionPolicy Bypass -File .\start-windows.ps1"
-    Write-Host "Open: http://127.0.0.1:8000"
+    Write-Host "Open: http://127.0.0.1:8321"
 
     if ($StartServer) {
         Write-Step "Starting server"

@@ -78,12 +78,12 @@ function Get-StartUrl {
         return $Url
     }
     $hostValue = (Get-EnvFileValue "HOST" "127.0.0.1").Trim()
-    $portValue = (Get-EnvFileValue "PORT" "8000").Trim()
+    $portValue = (Get-EnvFileValue "PORT" "8321").Trim()
     $httpsValue = (Get-EnvFileValue "ENABLE_HTTPS" "false").Trim().ToLowerInvariant()
-    $portNumber = 8000
+    $portNumber = 8321
     if (-not [int]::TryParse($portValue, [ref]$portNumber) -or $portNumber -le 0 -or $portNumber -gt 65535) {
-        Write-Warning "Invalid PORT=$portValue in .env; falling back to 8000."
-        $portNumber = 8000
+        Write-Warning "Invalid PORT=$portValue in .env; falling back to 8321."
+        $portNumber = 8321
     }
     if (-not $hostValue -or $hostValue -eq "0.0.0.0" -or $hostValue -eq "::" -or $hostValue -eq "*") {
         $hostValue = "127.0.0.1"
@@ -126,7 +126,7 @@ function Get-PortFromUrl([string]$TargetUrl) {
         $uri = [Uri]$TargetUrl
         return $uri.Port
     } catch {
-        return 8000
+        return 8321
     }
 }
 

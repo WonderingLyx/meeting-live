@@ -60,7 +60,7 @@ async function submit() {
           <b>{{ file?.name || t('product.home.chooseFile') }}</b>
           <small>{{ file ? t('product.home.replaceFile') : t('product.home.fileHint') }}</small>
         </button>
-        <input ref="input" class="sr-only" type="file" accept="audio/*,.mp4,.m4a,.wav,.mp3,.flac,.ogg" @change="choose(($event.target as HTMLInputElement).files?.[0])">
+        <input ref="input" class="sr-only" type="file" accept="audio/*,.mp4,.webm,.m4a,.wav,.mp3,.flac,.ogg,.aac,.wma" @change="choose(($event.target as HTMLInputElement).files?.[0])">
 
         <div v-if="file" class="upload-options">
           <label :class="{ active: mode === 'meeting' }">

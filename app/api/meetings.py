@@ -277,9 +277,20 @@ async def create_upload_meeting(
 ):
     """Persist audio and immediately return a durable meeting/job pair."""
     filename = Path(file.filename or "recording.wav").name
+    safe_filename = filename.replace("\r", "\\r").replace("\n", "\\n")[:200]
     extension = Path(filename).suffix.lower()
     if extension not in ALLOWED_AUDIO_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="不支持的音频格式")
+        allowed = ", ".join(sorted(ALLOWED_AUDIO_EXTENSIONS))
+        logger.warning(
+            "[upload] 拒绝上传: 不支持的音频格式 filename=%r extension=%r allowed=%s",
+            safe_filename,
+            extension or "<none>",
+            allowed,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的音频格式: {extension or '无扩展名'}。支持: {allowed}",
+        )
     media_dir = Path(config.storage.media_dir).resolve()
     media_dir.mkdir(parents=True, exist_ok=True)
     target = media_dir / f"{uuid.uuid4().hex}{extension}"
@@ -290,10 +301,16 @@ async def create_upload_meeting(
             size = await persist_upload(file, target, max_bytes=max_bytes)
         except UploadTooLargeError:
             limit_mb = max_bytes // (1024 * 1024)
+            logger.warning(
+                "[upload] 拒绝上传: 文件超过大小限制 filename=%r limit_mb=%d",
+                safe_filename,
+                limit_mb,
+            )
             raise HTTPException(
                 status_code=400, detail=f"文件超过 {limit_mb}MB 限制"
             ) from None
         if size == 0:
+            logger.warning("[upload] 拒绝上传: 上传文件为空 filename=%r", safe_filename)
             raise HTTPException(status_code=400, detail="上传文件为空")
         try:
             await asyncio.to_thread(
@@ -301,9 +318,29 @@ async def create_upload_meeting(
                 target,
                 max_duration_sec=config.audio.upload_max_duration,
             )
+        except ValueError as exc:
+            reason = str(exc) or "音频校验失败"
+            logger.warning(
+                "[upload] 音频校验失败 filename=%r size=%d path=%s: %s",
+                safe_filename,
+                size,
+                target,
+                reason,
+            )
+            raise HTTPException(status_code=400, detail=reason) from None
         except Exception as exc:
-            logger.warning("[upload] 音频解码失败 %s: %s", target, exc)
-            raise HTTPException(status_code=400, detail="音频无法解码,请检查文件格式是否为支持的音频类型") from None
+            logger.warning(
+                "[upload] 音频解码失败 filename=%r size=%d path=%s: %s",
+                safe_filename,
+                size,
+                target,
+                exc,
+            )
+            allowed = ", ".join(sorted(ALLOWED_AUDIO_EXTENSIONS))
+            raise HTTPException(
+                status_code=400,
+                detail=f"音频无法解码,请确认已安装 FFmpeg,并使用支持的音频类型: {allowed}",
+            ) from None
         meeting_id, job_id = request.app.state.meeting_repo.create_with_job(
             source="upload",
             title=Path(filename).stem or "未命名会议",

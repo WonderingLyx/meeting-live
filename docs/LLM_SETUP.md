@@ -103,7 +103,7 @@ LLM_MODEL=gpt-4o-mini
 
 ## 前端配置
 
-启动服务后打开 `http://127.0.0.1:8000/` → 左侧菜单 **Settings** → LLM 区块：
+启动服务后打开 `http://127.0.0.1:8321/` → 左侧菜单 **Settings** → LLM 区块：
 - 勾选"启用 LLM"
 - 状态显示 "✅ 可用"（如果 endpoint 通）
 

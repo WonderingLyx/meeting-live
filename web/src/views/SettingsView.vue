@@ -457,7 +457,7 @@ async function load() {
     const r = await getEngines()
     engines.value = r.engines
     currentEngine.value = r.current
-  } catch { /* 后端 8000 不通时静默 */ }
+  } catch { /* 后端默认端口不通时静默 */ }
   await refreshModels()
   await refreshAsrSettings()
   await refreshSpeakerSettings()
