@@ -1,5 +1,9 @@
 """Audio ingestion primitives shared by APIs and background processing."""
 import asyncio
+import os
+import shutil
+import subprocess
+import uuid
 from pathlib import Path
 from typing import BinaryIO
 
@@ -17,11 +21,128 @@ ALLOWED_AUDIO_EXTENSIONS = {
     ".aac",
     ".wma",
 }
+UPLOAD_TRANSCODE_REQUIRED_EXTENSIONS = {".mp4", ".webm", ".m4a", ".aac", ".wma"}
 UPLOAD_READ_SIZE = 1024 * 1024
 
 
 class UploadTooLargeError(ValueError):
     """Raised after an upload crosses its configured byte limit."""
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _resolve_media_tool(name: str) -> str | None:
+    env_keys = (
+        ("FFMPEG_BINARY", "FFMPEG_PATH")
+        if name == "ffmpeg"
+        else ("FFPROBE_BINARY", "FFPROBE_PATH")
+    )
+    candidates: list[str | None] = [os.getenv(key) for key in env_keys]
+    exe_name = f"{name}.exe" if os.name == "nt" else name
+    root = _project_root()
+    candidates.extend(
+        str(path)
+        for path in (
+            root / ".runtime" / "ffmpeg" / "bin" / exe_name,
+            root / "offline" / "ffmpeg" / "bin" / exe_name,
+            root / "tools" / "ffmpeg" / "bin" / exe_name,
+            root / "ffmpeg" / "bin" / exe_name,
+        )
+    )
+    candidates.append(shutil.which(name) or shutil.which(exe_name))
+    if name == "ffmpeg":
+        try:
+            import imageio_ffmpeg
+
+            candidates.append(imageio_ffmpeg.get_ffmpeg_exe())
+        except Exception:
+            pass
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            path = Path(candidate)
+            if path.is_file():
+                return str(path)
+        except OSError:
+            continue
+    return None
+
+
+def audio_transcode_available() -> bool:
+    return _resolve_media_tool("ffmpeg") is not None
+
+
+def transcode_audio_to_wav(
+    source: str | Path,
+    target: str | Path,
+    *,
+    sample_rate: int = 16000,
+    timeout_sec: float | None = None,
+) -> Path:
+    """Convert an uploaded compressed/container audio file to internal PCM WAV."""
+    ffmpeg = _resolve_media_tool("ffmpeg")
+    if not ffmpeg:
+        raise ValueError(
+            "当前环境无法解码该音频容器: 未找到 FFmpeg。请重新运行一键安装,或在当前虚拟环境安装 imageio-ffmpeg。"
+        )
+
+    source = Path(source)
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f"{target.stem}.{uuid.uuid4().hex}.tmp.wav")
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-y",
+        "-v",
+        "error",
+        "-nostdin",
+        "-i",
+        str(source),
+        "-map",
+        "0:a:0",
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-c:a",
+        "pcm_s16le",
+        str(tmp),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_sec,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        tmp.unlink(missing_ok=True)
+        raise ValueError(f"音频转码超时: 超过 {timeout_sec:g}s") from exc
+
+    if result.returncode != 0:
+        tmp.unlink(missing_ok=True)
+        detail = (result.stderr or result.stdout or "").strip()
+        if detail:
+            detail = detail[:500]
+        else:
+            detail = f"ffmpeg exit code {result.returncode}"
+        raise ValueError(f"音频无法用 FFmpeg 转为 WAV: {detail}")
+    if not tmp.is_file() or tmp.stat().st_size == 0:
+        tmp.unlink(missing_ok=True)
+        raise ValueError("音频无法用 FFmpeg 转为 WAV: 输出为空")
+
+    tmp.replace(target)
+    return target
 
 
 async def persist_upload(upload, target: Path, *, max_bytes: int) -> int:

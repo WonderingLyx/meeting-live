@@ -13,8 +13,11 @@ from pydantic import BaseModel, Field, field_validator
 from app.config import config
 from app.services.audio_files import (
     ALLOWED_AUDIO_EXTENSIONS,
+    UPLOAD_TRANSCODE_REQUIRED_EXTENSIONS,
     UploadTooLargeError,
+    audio_transcode_available,
     persist_upload,
+    transcode_audio_to_wav,
     validate_audio_file,
 )
 from app.services.voice_sample_quality import assess_voice_sample
@@ -128,9 +131,21 @@ async def add_voice_sample(
         raise HTTPException(status_code=404, detail="人物不存在")
     if request.app.state.people_repo.get(canonical_person_id) is None:
         raise HTTPException(status_code=404, detail="人物不存在")
-    extension = Path(file.filename or "sample.wav").suffix.lower()
+    filename = Path(file.filename or "sample.wav").name
+    safe_filename = filename.replace("\r", "\\r").replace("\n", "\\n")[:200]
+    extension = Path(filename).suffix.lower()
     if extension not in ALLOWED_AUDIO_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="不支持的声音样本格式")
+        allowed = ", ".join(sorted(ALLOWED_AUDIO_EXTENSIONS))
+        logger.warning(
+            "[voice] 拒绝上传: 不支持的声音样本格式 filename=%r extension=%r allowed=%s",
+            safe_filename,
+            extension or "<none>",
+            allowed,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的声音样本格式: {extension or '无扩展名'}。支持: {allowed}",
+        )
     voice_root = (Path(config.storage.media_dir).resolve() / "voices").resolve()
     # 文件系统目录仅使用 UUID 解析器生成的固定长度十六进制值，不直接使用 URL 参数。
     voice_dir = (voice_root / parsed_person_id.hex).resolve()
@@ -155,6 +170,33 @@ async def add_voice_sample(
             ) from None
         if size == 0:
             raise HTTPException(status_code=400, detail="声音样本为空")
+        if (
+            extension != ".wav"
+            and (extension in UPLOAD_TRANSCODE_REQUIRED_EXTENSIONS or audio_transcode_available())
+        ):
+            wav_target = target.with_suffix(".wav")
+            try:
+                await asyncio.to_thread(
+                    transcode_audio_to_wav,
+                    target,
+                    wav_target,
+                    sample_rate=config.audio.sample_rate,
+                    timeout_sec=max(600, config.audio.upload_max_duration * 2),
+                )
+            except ValueError as exc:
+                msg = str(exc) or "声音样本转码失败"
+                safe_target = str(target).replace("\r", r"\r").replace("\n", r"\n")[:500]
+                safe_error = msg.replace("\r", r"\r").replace("\n", r"\n")[:500]
+                logger.warning("[voice] 样本转码失败 %s: %s", safe_target, safe_error)
+                raise HTTPException(status_code=400, detail=msg) from None
+            target.unlink(missing_ok=True)
+            target = wav_target
+            logger.info(
+                "[voice] 样本已转为内部 WAV filename=%r source_ext=%s wav_path=%s",
+                safe_filename,
+                extension,
+                target,
+            )
         import librosa
 
         # 先用前 1 秒探测 + 元数据算时长,超限在此拒绝,避免超长低码率

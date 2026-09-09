@@ -268,6 +268,13 @@ def test_upload_accepts_browser_audio_container_extensions(
     client, app = make_client(tmp_path)
     monkeypatch.setattr(meetings_api.config.storage, "media_dir", str(tmp_path / "media"))
 
+    def fake_transcode(source, target, **_kwargs):
+        target = Path(target)
+        target.write_bytes(Path(source).read_bytes())
+        return target
+
+    monkeypatch.setattr(meetings_api, "transcode_audio_to_wav", fake_transcode)
+
     response = client.post(
         "/v1/meetings/upload?mode=meeting",
         files={"file": (filename, valid_wav_bytes(), content_type)},
@@ -276,7 +283,7 @@ def test_upload_accepts_browser_audio_container_extensions(
     assert response.status_code == 202
     meeting = app.state.meeting_repo.get(response.json()["meeting_id"])
     assert meeting["original_filename"] == filename
-    assert Path(meeting["audio_path"]).suffix == Path(filename).suffix
+    assert Path(meeting["audio_path"]).suffix == ".wav"
 
 
 def test_upload_returns_validation_detail_for_duration_limit(tmp_path, monkeypatch):

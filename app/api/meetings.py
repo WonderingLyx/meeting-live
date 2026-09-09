@@ -15,8 +15,11 @@ from app.config import config
 from app.repositories.meetings import SpeakerNotFoundError
 from app.services.audio_files import (
     ALLOWED_AUDIO_EXTENSIONS,
+    UPLOAD_TRANSCODE_REQUIRED_EXTENSIONS,
     UploadTooLargeError,
+    audio_transcode_available,
     persist_upload,
+    transcode_audio_to_wav,
     validate_audio_file,
 )
 from app.services.exporter import export_meeting as render_meeting_export
@@ -312,6 +315,37 @@ async def create_upload_meeting(
         if size == 0:
             logger.warning("[upload] 拒绝上传: 上传文件为空 filename=%r", safe_filename)
             raise HTTPException(status_code=400, detail="上传文件为空")
+        if (
+            extension != ".wav"
+            and (extension in UPLOAD_TRANSCODE_REQUIRED_EXTENSIONS or audio_transcode_available())
+        ):
+            wav_target = target.with_suffix(".wav")
+            try:
+                await asyncio.to_thread(
+                    transcode_audio_to_wav,
+                    target,
+                    wav_target,
+                    sample_rate=config.audio.sample_rate,
+                    timeout_sec=max(600, config.audio.upload_max_duration * 2),
+                )
+            except ValueError as exc:
+                reason = str(exc) or "音频转码失败"
+                logger.warning(
+                    "[upload] 音频转码失败 filename=%r size=%d path=%s: %s",
+                    safe_filename,
+                    size,
+                    target,
+                    reason,
+                )
+                raise HTTPException(status_code=400, detail=reason) from None
+            target.unlink(missing_ok=True)
+            target = wav_target
+            logger.info(
+                "[upload] 已转为内部 WAV filename=%r source_ext=%s wav_path=%s",
+                safe_filename,
+                extension,
+                target,
+            )
         try:
             await asyncio.to_thread(
                 validate_audio_file,

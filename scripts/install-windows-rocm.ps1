@@ -1243,7 +1243,7 @@ import importlib.util
 
 missing = [
     m
-    for m in ('uvicorn', 'fastapi', 'qwen_asr', 'funasr', 'modelscope', 'librosa', 'soundfile')
+    for m in ('uvicorn', 'fastapi', 'qwen_asr', 'funasr', 'modelscope', 'librosa', 'imageio_ffmpeg', 'soundfile')
     if importlib.util.find_spec(m) is None
 ]
 
