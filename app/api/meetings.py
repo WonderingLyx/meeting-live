@@ -22,6 +22,7 @@ from app.services.audio_files import (
     transcode_audio_to_wav,
     validate_audio_file,
 )
+from app.services.audio_enhancement import enhance_audio_for_models
 from app.services.exporter import export_meeting as render_meeting_export
 
 
@@ -58,11 +59,30 @@ def _expected_upload_size(request: Request) -> int | None:
     return size if size >= 0 else None
 
 
-def _browser_playback_cache_path(source: Path) -> Path:
+def _enhancement_cache_signature() -> str:
+    audio = config.audio
+    names = (
+        "enhancement_enabled",
+        "enhancement_high_pass_hz",
+        "enhancement_low_pass_hz",
+        "enhancement_noise_reduction",
+        "enhancement_noise_floor",
+        "enhancement_target_rms",
+        "enhancement_max_gain",
+        "enhancement_max_block_seconds",
+    )
+    return "|".join(f"{name}={getattr(audio, name, '')}" for name in names)
+
+
+def _browser_playback_cache_path(source: Path, variant: str = "browser") -> Path:
     stat = source.stat()
-    key = "|".join((str(source.resolve()), str(stat.st_size), str(stat.st_mtime_ns)))
+    key_parts = [variant, str(source.resolve()), str(stat.st_size), str(stat.st_mtime_ns)]
+    if variant == "enhanced":
+        key_parts.append(_enhancement_cache_signature())
+    key = "|".join(key_parts)
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
-    return Path(config.storage.media_dir).resolve() / "playback" / f"{digest}.wav"
+    suffix = ".wav" if variant == "browser" else f".{variant}.wav"
+    return Path(config.storage.media_dir).resolve() / "playback" / f"{digest}{suffix}"
 
 
 def _is_browser_pcm_wav(path: Path) -> bool:
@@ -152,35 +172,49 @@ def _write_pcm16_wav(path: Path, audio: object, sample_rate: int) -> None:
         wf.writeframes(pcm.tobytes())
 
 
-def _browser_playback_audio(path: Path) -> Path:
-    """Return browser-decodable PCM WAV, converting and caching if needed."""
-    target = _browser_playback_cache_path(path)
-    if target.is_file() and _is_browser_pcm_wav(target):
-        return target
+def _decode_audio_for_playback(path: Path) -> tuple[object, int]:
+    import librosa
+    import numpy as np
+
+    if path.suffix.lower() == ".wav":
+        try:
+            audio, sample_rate = _recover_pcm_wav_payload(path)
+            return np.asarray(audio, dtype=np.float32), int(sample_rate)
+        except Exception as exc:
+            logger.warning("[audio] %s PCM WAV 恢复失败，回退到常规解码: %s", path, exc)
+
+    audio, sample_rate = librosa.load(str(path), sr=config.audio.sample_rate, mono=True)
+    return np.asarray(audio, dtype=np.float32), int(sample_rate)
+
+
+def _write_cached_playback_wav(target: Path, audio: object, sample_rate: int) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f"{target.stem}.{uuid.uuid4().hex}.tmp.wav")
     try:
-        if path.suffix.lower() == ".wav":
-            try:
-                audio, sample_rate = _recover_pcm_wav_payload(path)
-            except Exception as exc:
-                logger.warning("[audio] %s PCM WAV 恢复失败，回退到常规解码: %s", path, exc)
-                import librosa
-                import numpy as np
-
-                audio, sample_rate = librosa.load(str(path), sr=config.audio.sample_rate, mono=True)
-                audio = np.asarray(audio, dtype=np.float32)
-        else:
-            import librosa
-            import numpy as np
-
-            audio, sample_rate = librosa.load(str(path), sr=config.audio.sample_rate, mono=True)
-            audio = np.asarray(audio, dtype=np.float32)
         _write_pcm16_wav(tmp, audio, int(sample_rate))
         tmp.replace(target)
     finally:
         tmp.unlink(missing_ok=True)
     return target
+
+
+def _browser_playback_audio(path: Path) -> Path:
+    """Return browser-decodable PCM WAV, converting and caching if needed."""
+    target = _browser_playback_cache_path(path)
+    if target.is_file() and _is_browser_pcm_wav(target):
+        return target
+    audio, sample_rate = _decode_audio_for_playback(path)
+    return _write_cached_playback_wav(target, audio, sample_rate)
+
+
+def _enhanced_playback_audio(path: Path) -> Path:
+    """Return browser-decodable enhanced PCM WAV for meeting playback."""
+    target = _browser_playback_cache_path(path, variant="enhanced")
+    if target.is_file() and _is_browser_pcm_wav(target):
+        return target
+    audio, sample_rate = _decode_audio_for_playback(path)
+    enhanced = enhance_audio_for_models(audio, int(sample_rate), profile="playback")
+    return _write_cached_playback_wav(target, enhanced, sample_rate)
 
 
 def _playable_live_audio(path: Path) -> tuple[bool, str]:
@@ -525,7 +559,7 @@ def reprocess_meeting(meeting_id: str, request: Request):
 def meeting_audio(
     meeting_id: str,
     request: Request,
-    playback: str = Query("original", pattern="^(original|browser)$"),
+    playback: str = Query("original", pattern="^(original|browser|enhanced)$"),
 ):
     meeting = request.app.state.meeting_repo.get(meeting_id)
     if meeting is None:
@@ -545,16 +579,24 @@ def meeting_audio(
     serve_path = path
     filename = meeting.get("original_filename") or path.name
     media_type = _audio_media_type(path)
-    if playback == "browser":
+    if playback in {"browser", "enhanced"}:
         try:
-            serve_path = _browser_playback_audio(path)
-            filename = f"{path.stem}.playback.wav"
+            if playback == "enhanced":
+                serve_path = _enhanced_playback_audio(path)
+                filename = f"{path.stem}.enhanced.wav"
+            else:
+                serve_path = _browser_playback_audio(path)
+                filename = f"{path.stem}.playback.wav"
             media_type = "audio/wav"
         except Exception as exc:
-            logger.warning("[audio] %s 转换浏览器播放音频失败: %s", meeting_id, exc)
+            logger.warning("[audio] %s 转换 %s 播放音频失败: %s", meeting_id, playback, exc)
+            if playback == "enhanced":
+                detail = "会议音频无法生成降噪播放版本，请确认 FFmpeg/libsndfile 可用"
+            else:
+                detail = "会议音频无法转换成浏览器可播放格式，请确认 FFmpeg/libsndfile 可用"
             raise HTTPException(
                 status_code=409,
-                detail="会议音频无法转换成浏览器可播放格式，请确认 FFmpeg/libsndfile 可用",
+                detail=detail,
             ) from None
     return FileResponse(
         serve_path,

@@ -1,5 +1,6 @@
 from pathlib import Path
 import io
+import wave
 
 import numpy as np
 import pytest
@@ -231,6 +232,46 @@ def test_meeting_audio_browser_playback_transcodes_cached_wav(tmp_path, monkeypa
     assert response.content.startswith(b"RIFF")
     assert audio.read_bytes() == b"not-browser-decodable"
     assert list((media_dir / "playback").glob("*.wav"))
+
+
+def test_meeting_audio_enhanced_playback_uses_enhancement_cache(tmp_path, monkeypatch):
+    from app.api import meetings as meetings_api
+
+    client, app = make_client(tmp_path)
+    media_dir = tmp_path / "media"
+    monkeypatch.setattr(meetings_api.config.storage, "media_dir", str(media_dir))
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(valid_wav_bytes())
+    calls = []
+
+    def fake_enhance(samples, sample_rate, *, profile="default"):
+        calls.append((len(samples), sample_rate, profile))
+        return np.full_like(samples, 0.25, dtype=np.float32)
+
+    monkeypatch.setattr(meetings_api, "enhance_audio_for_models", fake_enhance)
+    meeting_id = app.state.meeting_repo.create(
+        source="upload",
+        title="enhanced playback",
+        audio_path=str(audio),
+        original_filename="recording.wav",
+    )
+
+    response = client.get(f"/v1/meetings/{meeting_id}/audio?playback=enhanced")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("audio/wav")
+    with wave.open(io.BytesIO(response.content), "rb") as wf:
+        pcm = np.frombuffer(wf.readframes(wf.getnframes()), dtype="<i2")
+        assert wf.getframerate() == 16000
+    assert int(np.mean(np.abs(pcm))) > 7000
+    assert calls == [(16000, 16000, "playback")]
+    assert list((media_dir / "playback").glob("*.enhanced.wav"))
+
+    calls.clear()
+    cached = client.get(f"/v1/meetings/{meeting_id}/audio?playback=enhanced")
+    assert cached.status_code == 200
+    assert cached.content == response.content
+    assert calls == []
 
 
 def test_upload_immediately_creates_durable_job(tmp_path, monkeypatch):
