@@ -1944,6 +1944,90 @@ function Get-PortFromUrl([string]`$TargetUrl) {
     }
 }
 
+function Test-ProjectFfmpegAvailable {
+    if (Get-Command "ffmpeg" -ErrorAction SilentlyContinue) {
+        Write-Host "FFmpeg detected in PATH."
+        return `$true
+    }
+    `$ffmpegExe = if (`$IsWindows -or `$env:OS -eq "Windows_NT") { "ffmpeg.exe" } else { "ffmpeg" }
+    foreach (`$candidate in @(
+        (Join-Path `$Root ".runtime\ffmpeg\bin\`$ffmpegExe"),
+        (Join-Path `$Root "offline\ffmpeg\bin\`$ffmpegExe"),
+        (Join-Path `$Root "tools\ffmpeg\bin\`$ffmpegExe"),
+        (Join-Path `$Root "ffmpeg\bin\`$ffmpegExe")
+    )) {
+        if (Test-Path -LiteralPath `$candidate) {
+            Write-Host "Project FFmpeg detected: `$candidate"
+            return `$true
+        }
+    }
+    return `$false
+}
+
+function Test-ImageioFfmpegAvailable([string]`$PythonExe) {
+    `$code = @"
+import os
+try:
+    import imageio_ffmpeg
+    path = imageio_ffmpeg.get_ffmpeg_exe()
+    print(path or "")
+    raise SystemExit(0 if path and os.path.isfile(path) else 1)
+except Exception as exc:
+    print(str(exc))
+    raise SystemExit(1)
+"@
+    `$output = @(& `$PythonExe -c `$code 2>`$null)
+    if (`$LASTEXITCODE -eq 0) {
+        if (`$output) {
+            Write-Host "imageio-ffmpeg detected: `$(`$output[-1])"
+        }
+        return `$true
+    }
+    return `$false
+}
+
+function Install-ImageioFfmpeg([string]`$PythonExe) {
+    `$cacheDir = Join-Path `$Root ".download-cache\pip"
+    New-Item -ItemType Directory -Force -Path `$cacheDir | Out-Null
+    `$env:PIP_CACHE_DIR = `$cacheDir
+    `$findLinks = @()
+    foreach (`$dir in @(
+        (Join-Path `$Root "offline\wheels"),
+        (Join-Path `$Root ".download-cache\wheels")
+    )) {
+        if (Test-Path -LiteralPath `$dir) {
+            `$findLinks += @("--find-links", `$dir)
+        }
+    }
+    foreach (`$index in @(
+        "https://pypi.tuna.tsinghua.edu.cn/simple",
+        "https://mirrors.aliyun.com/pypi/simple",
+        "https://pypi.org/simple"
+    )) {
+        Write-Host "Installing imageio-ffmpeg for MP4/WebM upload decoding: `$index"
+        & `$PythonExe -m pip install --disable-pip-version-check --prefer-binary @findLinks -i `$index "imageio-ffmpeg>=0.5.1,<1.0.0"
+        if (`$LASTEXITCODE -eq 0) {
+            return `$true
+        }
+        Write-Warning "imageio-ffmpeg install failed from `$index"
+    }
+    return `$false
+}
+
+function Ensure-AudioTranscodeRuntime([string]`$PythonExe) {
+    if (Test-ProjectFfmpegAvailable) {
+        return
+    }
+    if (Test-ImageioFfmpegAvailable `$PythonExe) {
+        return
+    }
+    Write-Warning "FFmpeg runtime is missing. Trying to install project-local imageio-ffmpeg."
+    if ((Install-ImageioFfmpeg `$PythonExe) -and (Test-ImageioFfmpegAvailable `$PythonExe)) {
+        return
+    }
+    Write-Warning "MP4/WebM/M4A uploads may fail until FFmpeg or imageio-ffmpeg is available in this virtual environment."
+}
+
 `$candidateVenvs = @()
 if (`$VenvPath) {
     `$candidateVenvs += `$VenvPath
@@ -1988,6 +2072,8 @@ Set-Location `$Root
 `$env:OPENBLAS_MAIN_FREE = "1"
 `$env:HF_HUB_DISABLE_XET = "1"
 
+Ensure-AudioTranscodeRuntime `$Python
+
 `$ResolvedUrl = Get-StartUrl
 Write-Host "Open URL: `$ResolvedUrl"
 `$ResolvedPort = Get-PortFromUrl `$ResolvedUrl
@@ -2005,7 +2091,7 @@ if (Test-LocalPortInUse `$ResolvedPort) {
         }
     } catch {
     }
-    throw "Port `$ResolvedPort is already in use. Change PORT in .env, for example PORT=8001, then rerun start-windows.ps1."
+    throw "Port `$ResolvedPort is already in use. Change PORT in .env, for example PORT=8322, then rerun start-windows.ps1."
 }
 
 if (-not `$NoBrowser) {
