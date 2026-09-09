@@ -12,6 +12,7 @@ from fastapi import APIRouter, WebSocket
 from app.config import config
 from app.constants import SYSTEM_SPEAKER
 from app.services import SessionContext
+from app.services.audio_enhancement import enhance_audio_for_models
 from app.runtime import EngineSnapshot
 from app.services.realtime_auth import authenticate_websocket, ws_revalidate
 from engine.speaker.speaker_factory import get_engine_info
@@ -384,11 +385,16 @@ def can_run_engine_pair_in_parallel(asr: object, speaker: object) -> bool:
     return asr_device != speaker_device
 
 
-async def _run_live_engines(engines: EngineSnapshot, audio_data: np.ndarray):
+async def _run_live_engines(
+    engines: EngineSnapshot,
+    audio_data: np.ndarray,
+    *,
+    use_asr_preprocessing: bool = True,
+):
     """Run independent ASR and speaker providers without early slot release."""
     async def call_asr():
         try:
-            return await engines.asr.run_asr(audio_data, use_preprocessing=True)
+            return await engines.asr.run_asr(audio_data, use_preprocessing=use_asr_preprocessing)
         except Exception as exc:
             return exc
 
@@ -722,12 +728,24 @@ async def _process_speech_segment(
     engines = _engine_snapshot(websocket)
     runtime = _runtime_for(websocket)
     inference_slot = runtime.inference.live()
+    model_audio = await asyncio.to_thread(
+        enhance_audio_for_models,
+        audio_data,
+        sample_rate,
+        profile="live_segment",
+    )
 
     # Cancellation of asyncio.to_thread does not stop its worker. Shield the
     # pair and wait for it before releasing the inference slot so a subsequent
     # job cannot run over a still-active model call.
     async with inference_slot:
-        inference_task = asyncio.create_task(_run_live_engines(engines, audio_data))
+        inference_task = asyncio.create_task(
+            _run_live_engines(
+                engines,
+                model_audio,
+                use_asr_preprocessing=False,
+            )
+        )
         try:
             asr_result, emb_result = await asyncio.shield(inference_task)
         except asyncio.CancelledError:

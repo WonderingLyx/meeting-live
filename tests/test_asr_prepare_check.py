@@ -5,7 +5,7 @@
 2. lambda 闭包:第二个 run_in_executor 的 lambda 引用 audio_data 是否拿到 prepared 值
 3. 异常语义:_prepare_and_check 抛异常是否被吞
 4. use_preprocessing=False 时不 preprocess
-5. FunASR 的 use_preprocessing 是 dead parameter
+5. FunASR 的 use_preprocessing 控制共享音频增强
 6. asyncio.get_event_loop() deprecation
 """
 from __future__ import annotations
@@ -196,6 +196,7 @@ def _make_funasr_engine():
     engine = object.__new__(FunASREngine)
     engine.kind = "sensevoice"
     engine._postprocess = None
+    engine.sample_rate = 16000
 
     transcribe_calls: list = []
 
@@ -237,20 +238,27 @@ def test_funasr_silent_returns_empty():
     assert len(engine._t_transcribe) == 0
 
 
-def test_funasr_use_preprocessing_is_dead_parameter():
-    """FunASR 的 _prepare_and_check 接收 use_preprocessing 但从不调用 preprocess_audio。
-    验证 use_preprocessing=True/False 行为完全相同(无 preprocess_audio 方法)。
-    这不是新引入的 bug(原代码也忽略 use_preprocessing),但是 dead parameter。
-    """
+def test_funasr_use_preprocessing_controls_shared_enhancement(monkeypatch):
+    """FunASR 也必须走共享音频增强,但 use_preprocessing=False 时保持原音频。"""
+    import engine.asr.funasr_engine as funasr_mod
+
     engine = _make_funasr_engine()
     audio = np.ones(16000, dtype=np.float32)
+    calls = []
 
-    # 不应该有 preprocess_audio 方法
-    assert not hasattr(engine, "preprocess_audio")
+    def _fake_enhance(audio_data, sample_rate, *, profile="default"):
+        calls.append((audio_data, sample_rate, profile))
+        return audio_data * 2.0
 
-    r1 = asyncio.run(engine.run_asr(audio, use_preprocessing=True))
-    r2 = asyncio.run(engine.run_asr(audio, use_preprocessing=False))
-    assert r1 == r2
+    monkeypatch.setattr(funasr_mod, "enhance_audio_for_models", _fake_enhance)
+
+    asyncio.run(engine.run_asr(audio, use_preprocessing=True))
+    np.testing.assert_array_equal(engine._t_transcribe[-1], audio * 2.0)
+    assert calls and calls[-1][1] == 16000
+    assert calls[-1][2] == "funasr:sensevoice"
+
+    asyncio.run(engine.run_asr(audio, use_preprocessing=False))
+    np.testing.assert_array_equal(engine._t_transcribe[-1], audio)
 
 
 def test_funasr_prepare_exception_propagates():

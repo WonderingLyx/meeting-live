@@ -11,6 +11,16 @@ ALLOWED_HOST_RE = re.compile(
 # 禁止的 host — 仅匹配 http(s):// 后跟公网 host 的 URL
 PUBLIC_HOST_RE = re.compile(r"https?://(?!127\.|localhost|::1|192\.168\.|10\.\d|172\.(1[6-9]|2\d|3[01]))[a-zA-Z0-9.-]+")
 
+# User-configurable model/provider endpoints are not telemetry.  They remain
+# documented and are only contacted by explicit model loading or connection
+# tests, not by background analytics.
+KNOWN_MODEL_ENDPOINT_HOSTS = {
+    "https://api.openai.com",
+    "https://hf-mirror.com",
+    "https://huggingface.co",
+    "https://modelscope.cn",
+}
+
 FORBIDDEN_SDK_PATTERNS = [
     re.compile(r"google-analytics\.com"),
     re.compile(r"gtag\("),
@@ -27,6 +37,8 @@ def _scan_python(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8")
     violations = []
     for m in PUBLIC_HOST_RE.finditer(text):
+        if m.group(0).rstrip("/") in KNOWN_MODEL_ENDPOINT_HOSTS:
+            continue
         violations.append(f"{path}: 公网 URL: {m.group(0)}")
     for pat in FORBIDDEN_SDK_PATTERNS:
         for m in pat.finditer(text):

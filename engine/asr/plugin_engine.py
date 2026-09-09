@@ -24,6 +24,7 @@ from typing import Any
 import numpy as np
 
 from app.config import config
+from app.services.audio_enhancement import enhance_audio_for_models
 from .common import evaluate_audio_quality, filter_hallucinations, rms_is_silent
 from .contracts import empty_asr_result, normalize_asr_result
 
@@ -338,6 +339,13 @@ class ExternalCommandASREngine:
     async def run_asr(self, audio_data, use_preprocessing=True):
         if audio_data is None or len(audio_data) < 1600:
             return empty_asr_result()
+        if use_preprocessing:
+            audio_data = await asyncio.to_thread(
+                enhance_audio_for_models,
+                audio_data,
+                self.sample_rate,
+                profile=f"asr_plugin:{self.plugin_id}",
+            )
         if self.is_silent(audio_data, use_vad=False):
             return empty_asr_result()
         return await asyncio.to_thread(self._run_sync, audio_data)

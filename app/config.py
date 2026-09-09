@@ -149,6 +149,15 @@ class AudioConfig:
     # 增益
     target_rms: float = 0.08
     max_gain: float = 10.0
+    # 模型前音频增强
+    enhancement_enabled: bool = True
+    enhancement_high_pass_hz: float = 80.0
+    enhancement_low_pass_hz: float = 7600.0
+    enhancement_noise_reduction: float = 0.35
+    enhancement_noise_floor: float = 0.08
+    enhancement_target_rms: float = 0.08
+    enhancement_max_gain: float = 8.0
+    enhancement_max_block_seconds: float = 30.0
     # 队列
     queue_size: int = 8
     skip_frame_threshold: int = 3
@@ -189,6 +198,14 @@ class AudioConfig:
             min_speech_duration_ms=get_env_int("VAD_MIN_SPEECH_DURATION", 200),
             target_rms=get_env_float("AUDIO_TARGET_RMS", 0.08),
             max_gain=get_env_float("AUDIO_MAX_GAIN", 10.0),
+            enhancement_enabled=get_env_bool("AUDIO_ENHANCEMENT_ENABLED", True),
+            enhancement_high_pass_hz=get_env_float("AUDIO_ENHANCEMENT_HIGH_PASS_HZ", 80.0),
+            enhancement_low_pass_hz=get_env_float("AUDIO_ENHANCEMENT_LOW_PASS_HZ", 7600.0),
+            enhancement_noise_reduction=get_env_float("AUDIO_ENHANCEMENT_NOISE_REDUCTION", 0.35),
+            enhancement_noise_floor=get_env_float("AUDIO_ENHANCEMENT_NOISE_FLOOR", 0.08),
+            enhancement_target_rms=get_env_float("AUDIO_ENHANCEMENT_TARGET_RMS", get_env_float("AUDIO_TARGET_RMS", 0.08)),
+            enhancement_max_gain=get_env_float("AUDIO_ENHANCEMENT_MAX_GAIN", 8.0),
+            enhancement_max_block_seconds=get_env_float("AUDIO_ENHANCEMENT_MAX_BLOCK_SECONDS", 30.0),
             queue_size=get_env_int("AUDIO_QUEUE_SIZE", 8),
             skip_frame_threshold=get_env_int("AUDIO_SKIP_FRAME_THRESHOLD", 3),
             queue_monitor_interval=get_env_float("AUDIO_QUEUE_MONITOR_INTERVAL", 5.0),

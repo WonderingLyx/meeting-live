@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 
 from app.config import config
+from app.services.audio_enhancement import enhance_audio_for_models
 from app.services.audio_files import split_audio_into_chunks
 from app.services.speaker_alignment import align_speakers_to_segments
 
@@ -341,13 +342,20 @@ class MeetingProcessor:
         )
         if len(audio) == 0:
             raise PermanentJobError("audio contains no samples")
+        audio = np.asarray(audio, dtype=np.float32)
         duration = len(audio) / config.audio.sample_rate
         self.meeting_repo.update(
             meeting_id, status="processing", duration_sec=duration, error_message=None
         )
+        model_audio = await asyncio.to_thread(
+            enhance_audio_for_models,
+            audio,
+            config.audio.sample_rate,
+            profile="upload_meeting",
+        )
 
         chunks = split_audio_into_chunks(
-            np.asarray(audio, dtype=np.float32),
+            model_audio,
             config.audio.sample_rate,
             config.audio.upload_chunk_duration,
             config.audio.upload_overlap_duration,
@@ -360,7 +368,7 @@ class MeetingProcessor:
             await self._checkpoint(job_id, "transcribing", progress)
             async with self.runtime.inference.offline():
                 result = await await_uninterruptible(
-                    engines.asr.run_asr(chunk, use_preprocessing=True)
+                    engines.asr.run_asr(chunk, use_preprocessing=False)
                 )
             result = normalize_offline_asr_result(
                 result, audio_duration=len(chunk) / config.audio.sample_rate
@@ -409,7 +417,7 @@ class MeetingProcessor:
                 final_segments, diarization_status, diarization_error = (
                     await await_uninterruptible(
                         asyncio.to_thread(
-                            self._offline_diarize, audio_path, asr_segments, audio,
+                            self._offline_diarize, audio_path, asr_segments, model_audio,
                         )
                     )
                 )
@@ -468,7 +476,7 @@ class MeetingProcessor:
         if self.people_repo is not None and engines.speaker is not None:
             try:
                 await self._match_known_people(
-                    meeting_id, audio, final_segments, engines.speaker
+                    meeting_id, model_audio, final_segments, engines.speaker
                 )
             except Exception:
                 logger.warning(

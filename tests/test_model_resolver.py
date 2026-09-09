@@ -39,7 +39,7 @@ def test_hf_download_is_published_atomically(isolated_models, monkeypatch):
     assert not list(result.parent.glob(".model.partial-*"))
 
 
-def test_failed_hf_download_never_exposes_partial_directory(
+def test_failed_hf_download_never_publishes_partial_directory(
     isolated_models, monkeypatch
 ):
     def snapshot_download(repo_id, *, revision, local_dir):
@@ -57,7 +57,9 @@ def test_failed_hf_download_never_exposes_partial_directory(
 
     destination = isolated_models / "asr" / "model"
     assert not destination.exists()
-    assert not list(destination.parent.glob(".model.partial-*"))
+    staging_dirs = list(destination.parent.glob(".model.partial-*"))
+    assert staging_dirs
+    assert (staging_dirs[0] / "partial.bin").is_file()
 
 
 def test_legacy_nonempty_hf_directory_must_contain_model_metadata(

@@ -44,6 +44,7 @@ def _install_fake_engines():
     fake_factory.get_engine_info = MagicMock(return_value={"name": "Mock", "model": "mock"})
     fake_factory.get_all_engines = MagicMock(return_value={"current": "mock", "asr": {}, "speakers": {}})
     fake_factory.ENGINE_CONFIG = {}
+    fake_factory.embedding_model_id = MagicMock(return_value="speaker:mock:v1:dim=192:norm=l2")
     fake_factory.get_engine_manager = MagicMock(return_value=MagicMock())
 
     sys.modules["engine.speaker"] = fake_speaker_pkg

@@ -7,10 +7,10 @@ import asyncio
 import logging
 import threading
 import time
-import scipy.signal as signal
 from qwen_asr import Qwen3ASRModel
 from engine.asr.contracts import empty_asr_result, make_asr_result
 from engine.asr.common import filter_hallucinations
+from app.services.audio_enhancement import enhance_audio_for_models
 from app.services.model_resolver import resolve_hf, resolve_silero_vad
 
 logger = logging.getLogger("ASR_Engine")
@@ -216,38 +216,11 @@ class ASREngine:
 
     def preprocess_audio(self, audio_data: np.ndarray) -> np.ndarray:
         """音频预处理：降噪、增益、滤波"""
-        if len(audio_data) < 1600:
-            return audio_data
-        
-        # 1. 高通滤波（去除低频噪声，如电源嗡嗡声）
-        try:
-            sos = signal.butter(4, 80, btype='highpass', fs=self.sample_rate, output='sos')
-            audio_data = signal.sosfilt(sos, audio_data)
-        except Exception:
-            pass
-        
-        # 2. 自动增益控制 (AGC) - 改进版
-        rms = np.sqrt(np.mean(audio_data**2))
-        target_rms = 0.08  # 目标 RMS
-        
-        if rms > 1e-6:
-            # 动态增益：保持合理范围
-            gain = min(target_rms / rms, 10.0)  # 最大增益 10 倍
-            audio_data = audio_data * gain
-            
-            # 软限幅防止削波
-            peak = np.max(np.abs(audio_data))
-            if peak > 0.95:
-                audio_data = audio_data * (0.95 / peak)
-                # 软限幅
-                audio_data = np.tanh(audio_data * 1.5) / 1.5
-        
-        # 3. 软门限降噪（针对稳态噪声）
-        # 注意:这是简化的能量门限,不是完整 STFT 谱减。VAD + Silero
-        # 负责主要的语音检测,这一步只做粗粒度软门限。
-        audio_data = self._spectral_subtraction(audio_data, noise_est_ratio=0.1)
-
-        return audio_data
+        return enhance_audio_for_models(
+            audio_data,
+            self.sample_rate,
+            profile="qwen_asr",
+        )
 
     def _spectral_subtraction(self, audio: np.ndarray, noise_est_ratio: float = 0.1) -> np.ndarray:
         """软门限降噪（不是完整谱减法）

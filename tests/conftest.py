@@ -221,6 +221,14 @@ _ENV_KEYS_TO_ISOLATE = (
     "ASR_ENGINE",
     "ASR_DEVICE",
     "ASR_LOAD_TIMEOUT_SEC",
+    "AUDIO_ENHANCEMENT_ENABLED",
+    "AUDIO_ENHANCEMENT_HIGH_PASS_HZ",
+    "AUDIO_ENHANCEMENT_LOW_PASS_HZ",
+    "AUDIO_ENHANCEMENT_NOISE_REDUCTION",
+    "AUDIO_ENHANCEMENT_NOISE_FLOOR",
+    "AUDIO_ENHANCEMENT_TARGET_RMS",
+    "AUDIO_ENHANCEMENT_MAX_GAIN",
+    "AUDIO_ENHANCEMENT_MAX_BLOCK_SECONDS",
     "DIARIZATION_ENGINE",
     "DIARIZATION_MODEL",
     "DIARIZATION_PROVIDER",
@@ -278,6 +286,14 @@ def _isolate_os_environ(tmp_path):
             "asr_device": config.audio.asr_device,
             "asr_load_timeout_sec": config.audio.asr_load_timeout_sec,
             "asr_word_timestamps": config.audio.asr_word_timestamps,
+            "audio_enhancement_enabled": config.audio.enhancement_enabled,
+            "audio_enhancement_high_pass_hz": config.audio.enhancement_high_pass_hz,
+            "audio_enhancement_low_pass_hz": config.audio.enhancement_low_pass_hz,
+            "audio_enhancement_noise_reduction": config.audio.enhancement_noise_reduction,
+            "audio_enhancement_noise_floor": config.audio.enhancement_noise_floor,
+            "audio_enhancement_target_rms": config.audio.enhancement_target_rms,
+            "audio_enhancement_max_gain": config.audio.enhancement_max_gain,
+            "audio_enhancement_max_block_seconds": config.audio.enhancement_max_block_seconds,
             "speaker_engine_type": config.speaker.engine_type,
             "diarization_device": config.speaker.diarization_device,
             "llm_enabled": config.llm.enabled,
@@ -307,6 +323,14 @@ def _isolate_os_environ(tmp_path):
         config.audio.asr_device = cfg_snapshot["asr_device"]
         config.audio.asr_load_timeout_sec = cfg_snapshot["asr_load_timeout_sec"]
         config.audio.asr_word_timestamps = cfg_snapshot["asr_word_timestamps"]
+        config.audio.enhancement_enabled = cfg_snapshot["audio_enhancement_enabled"]
+        config.audio.enhancement_high_pass_hz = cfg_snapshot["audio_enhancement_high_pass_hz"]
+        config.audio.enhancement_low_pass_hz = cfg_snapshot["audio_enhancement_low_pass_hz"]
+        config.audio.enhancement_noise_reduction = cfg_snapshot["audio_enhancement_noise_reduction"]
+        config.audio.enhancement_noise_floor = cfg_snapshot["audio_enhancement_noise_floor"]
+        config.audio.enhancement_target_rms = cfg_snapshot["audio_enhancement_target_rms"]
+        config.audio.enhancement_max_gain = cfg_snapshot["audio_enhancement_max_gain"]
+        config.audio.enhancement_max_block_seconds = cfg_snapshot["audio_enhancement_max_block_seconds"]
         config.speaker.engine_type = cfg_snapshot["speaker_engine_type"]
         config.speaker.diarization_device = cfg_snapshot["diarization_device"]
         config.llm.enabled = cfg_snapshot["llm_enabled"]

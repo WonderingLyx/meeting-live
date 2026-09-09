@@ -24,6 +24,20 @@ def test_deployment_config_defaults_to_local():
     assert cfg.mode == "local"
 
 
+def test_audio_enhancement_config_reads_env(monkeypatch):
+    from app.config import AudioConfig
+
+    monkeypatch.setenv("AUDIO_ENHANCEMENT_ENABLED", "false")
+    monkeypatch.setenv("AUDIO_ENHANCEMENT_NOISE_REDUCTION", "0.55")
+    monkeypatch.setenv("AUDIO_ENHANCEMENT_TARGET_RMS", "0.06")
+
+    cfg = AudioConfig.from_env()
+
+    assert cfg.enhancement_enabled is False
+    assert cfg.enhancement_noise_reduction == 0.55
+    assert cfg.enhancement_target_rms == 0.06
+
+
 def test_server_defaults_to_loopback(monkeypatch):
     from app.config import ServerConfig
     monkeypatch.delenv("HOST", raising=False)

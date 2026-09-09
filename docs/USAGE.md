@@ -21,6 +21,15 @@
 
 实时模式把音频和最终转写段落作为一场会议入库。字幕与说话人标签是近似的。对会后质量有要求时请用上传的完整录音。浏览器需授权麦克风；非本机的移动端访问通常需 HTTPS。
 
+## 声音增强
+
+服务默认在音频进入 ASR、声纹匹配和上传说话人分离模型前启用轻量人声增强。原始录音文件不会被覆盖，回放仍使用原始录音。常用调节项在 `.env` 中：
+
+- `AUDIO_ENHANCEMENT_ENABLED=true`：总开关。
+- `AUDIO_ENHANCEMENT_NOISE_REDUCTION=0.35`：降噪强度，麦克风底噪大可试 `0.45`，出现金属音则降到 `0.2`。
+- `AUDIO_ENHANCEMENT_TARGET_RMS=0.08`：目标音量，收音太小可试 `0.1`。
+- `AUDIO_ENHANCEMENT_MAX_GAIN=8.0`：最大自动增益，环境嘈杂时不要调太高。
+
 ## 纪要与导出
 
 摘要、行动项、纪要有本地 extractive 兜底。启用外部 LLM 会把转写文本发到配置的 endpoint。使用前请人工复核生成的纪要。导出格式：Markdown、SRT、WebVTT、JSON。

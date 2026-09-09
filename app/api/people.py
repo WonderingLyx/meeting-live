@@ -11,6 +11,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 from app.config import config
+from app.services.audio_enhancement import enhance_audio_for_models
 from app.services.audio_files import (
     ALLOWED_AUDIO_EXTENSIONS,
     UPLOAD_TRANSCODE_REQUIRED_EXTENSIONS,
@@ -229,6 +230,12 @@ async def add_voice_sample(
             raise HTTPException(status_code=400, detail="声音样本无法解码,请检查文件格式") from None
         audio = np.asarray(audio, dtype=np.float32)
         duration = len(audio) / config.audio.sample_rate
+        model_audio = await asyncio.to_thread(
+            enhance_audio_for_models,
+            audio,
+            config.audio.sample_rate,
+            profile="voice_sample",
+        )
         # validate_audio_file 已在上游探测时长上限;此处保留双保险。
         if duration > config.audio.upload_max_duration:
             raise HTTPException(
@@ -237,7 +244,7 @@ async def add_voice_sample(
             )
         if duration < 2:
             raise HTTPException(status_code=400, detail="声音样本至少需要 2 秒")
-        assessment = assess_voice_sample(audio, config.audio.sample_rate)
+        assessment = assess_voice_sample(model_audio, config.audio.sample_rate)
         if assessment.effective_speech_sec < 2:
             if assessment.effective_speech_sec < 0.5:
                 raise HTTPException(
@@ -250,7 +257,7 @@ async def add_voice_sample(
                 "声音样本质量过低，请避免音量过小或削波"
             )
             raise HTTPException(status_code=422, detail=detail)
-        audio_sha256 = hashlib.sha256(audio.astype("<f4", copy=False).tobytes()).hexdigest()
+        audio_sha256 = hashlib.sha256(model_audio.astype("<f4", copy=False).tobytes()).hexdigest()
         if request.app.state.people_repo.has_sample_hash(canonical_person_id, audio_sha256):
             raise HTTPException(status_code=409, detail="该人物已注册相同的声音样本")
         runtime = getattr(request.app.state, "runtime", None)
@@ -268,12 +275,12 @@ async def add_voice_sample(
             async with runtime.inference.offline():
                 embedding_result = await asyncio.to_thread(
                     speaker_engine.extract_feat,
-                    audio,
+                    model_audio,
                 )
         else:
             embedding_result = await asyncio.to_thread(
                 speaker_engine.extract_feat,
-                audio,
+                model_audio,
             )
         embedding = (
             embedding_result[0]
