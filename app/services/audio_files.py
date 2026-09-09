@@ -21,7 +21,7 @@ ALLOWED_AUDIO_EXTENSIONS = {
     ".aac",
     ".wma",
 }
-UPLOAD_TRANSCODE_REQUIRED_EXTENSIONS = {".mp4", ".webm", ".m4a", ".aac", ".wma"}
+UPLOAD_TRANSCODE_REQUIRED_EXTENSIONS = ALLOWED_AUDIO_EXTENSIONS - {".wav"}
 UPLOAD_READ_SIZE = 1024 * 1024
 
 
@@ -74,6 +74,101 @@ def _resolve_media_tool(name: str) -> str | None:
 
 def audio_transcode_available() -> bool:
     return _resolve_media_tool("ffmpeg") is not None
+
+
+def inspect_media_file(path: str | Path, *, max_atoms: int = 64) -> dict[str, object]:
+    """Return lightweight container diagnostics without decoding media data."""
+    source = Path(path)
+    if not source.is_file():
+        return {"exists": False, "path": str(source)}
+
+    size = source.stat().st_size
+    with source.open("rb") as fh:
+        head = fh.read(32)
+    info: dict[str, object] = {
+        "exists": True,
+        "path": str(source),
+        "size": size,
+        "head_hex": head[:16].hex(),
+        "kind": "unknown",
+        "atoms": [],
+        "has_ftyp": False,
+        "has_mdat": False,
+        "has_moov": False,
+        "parse_error": "",
+    }
+    if head.startswith(b"RIFF"):
+        info["kind"] = "riff"
+        return info
+    if head.startswith(b"\x1aE\xdf\xa3"):
+        info["kind"] = "webm"
+        return info
+    if len(head) < 12 or head[4:8] != b"ftyp":
+        return info
+
+    info["kind"] = "mp4"
+    atoms: list[str] = []
+    pos = 0
+    try:
+        with source.open("rb") as fh:
+            for _ in range(max_atoms):
+                if pos + 8 > size:
+                    break
+                fh.seek(pos)
+                header = fh.read(16)
+                if len(header) < 8:
+                    break
+                atom_size = int.from_bytes(header[0:4], "big")
+                atom_type_raw = header[4:8]
+                atom_type = atom_type_raw.decode("ascii", errors="replace")
+                header_size = 8
+                if atom_size == 1:
+                    if len(header) < 16:
+                        info["parse_error"] = f"incomplete large atom header at {pos}"
+                        break
+                    atom_size = int.from_bytes(header[8:16], "big")
+                    header_size = 16
+                elif atom_size == 0:
+                    atom_size = size - pos
+                if atom_size < header_size:
+                    info["parse_error"] = f"invalid atom {atom_type}@{pos} size={atom_size}"
+                    break
+                atoms.append(f"{atom_type}@{pos}+{atom_size}")
+                if atom_type == "ftyp":
+                    info["has_ftyp"] = True
+                elif atom_type == "mdat":
+                    info["has_mdat"] = True
+                elif atom_type == "moov":
+                    info["has_moov"] = True
+                next_pos = pos + atom_size
+                if next_pos <= pos or next_pos > size:
+                    if next_pos > size:
+                        info["parse_error"] = (
+                            f"atom {atom_type}@{pos} extends past EOF: {next_pos}>{size}"
+                        )
+                    break
+                pos = next_pos
+    except OSError as exc:
+        info["parse_error"] = str(exc)
+
+    info["atoms"] = atoms
+    return info
+
+
+def media_diagnostic_summary(path: str | Path) -> str:
+    info = inspect_media_file(path)
+    if not info.get("exists"):
+        return "diagnostic=missing-file"
+    atoms = ",".join((info.get("atoms") or [])[:8]) or "none"
+    parse_error = str(info.get("parse_error") or "")
+    if parse_error:
+        parse_error = f" parse_error={parse_error}"
+    return (
+        f"diagnostic kind={info.get('kind')} size={info.get('size')} "
+        f"head={info.get('head_hex')} has_ftyp={info.get('has_ftyp')} "
+        f"has_mdat={info.get('has_mdat')} has_moov={info.get('has_moov')} "
+        f"atoms={atoms}{parse_error}"
+    )
 
 
 def transcode_audio_to_wav(
@@ -136,7 +231,14 @@ def transcode_audio_to_wav(
             detail = detail[:500]
         else:
             detail = f"ffmpeg exit code {result.returncode}"
-        raise ValueError(f"音频无法用 FFmpeg 转为 WAV: {detail}")
+        if "moov atom not found" in detail.lower():
+            raise ValueError(
+                "MP4 文件缺少 moov 索引，通常表示录制/导出/下载未完成或文件被截断，"
+                f"无法可靠转写。{media_diagnostic_summary(source)}"
+            )
+        raise ValueError(
+            f"音频无法用 FFmpeg 转为 WAV: {detail}。{media_diagnostic_summary(source)}"
+        )
     if not tmp.is_file() or tmp.stat().st_size == 0:
         tmp.unlink(missing_ok=True)
         raise ValueError("音频无法用 FFmpeg 转为 WAV: 输出为空")

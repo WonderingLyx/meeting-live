@@ -105,6 +105,7 @@ export async function uploadMeeting(file:File, mode:'quick'|'meeting', onProgres
     method:'POST',
     url:`/v1/meetings/upload?mode=${mode}`,
     data,
+    headers:{'X-Upload-Size':String(file.size)},
     timeout:0,
     onUploadProgress:e=>onProgress?.(e.total ? Math.round(e.loaded/e.total*100):0),
   })

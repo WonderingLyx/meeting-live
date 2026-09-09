@@ -306,6 +306,25 @@ def test_upload_returns_validation_detail_for_duration_limit(tmp_path, monkeypat
     assert response.json()["detail"] == "音频超过 3600 秒限制"
 
 
+def test_upload_rejects_mismatched_browser_file_size(tmp_path, monkeypatch):
+    from app.api import meetings as meetings_api
+
+    client, app = make_client(tmp_path)
+    media_dir = tmp_path / "media"
+    monkeypatch.setattr(meetings_api.config.storage, "media_dir", str(media_dir))
+
+    response = client.post(
+        "/v1/meetings/upload?mode=meeting",
+        headers={"X-Upload-Size": "999999"},
+        files={"file": ("planning.wav", valid_wav_bytes(), "audio/wav")},
+    )
+
+    assert response.status_code == 400
+    assert "文件上传不完整" in response.json()["detail"]
+    assert app.state.meeting_repo.list()[0] == 0
+    assert list(media_dir.glob("*")) == []
+
+
 def test_upload_removes_meeting_and_audio_when_job_creation_fails(tmp_path, monkeypatch):
     from app.api import meetings as meetings_api
 

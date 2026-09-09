@@ -46,6 +46,18 @@ def _audio_media_type(path: Path) -> str:
     return AUDIO_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
 
+def _expected_upload_size(request: Request) -> int | None:
+    raw = request.headers.get("x-upload-size")
+    if not raw:
+        return None
+    try:
+        size = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("[upload] 忽略无效 X-Upload-Size=%r", raw)
+        return None
+    return size if size >= 0 else None
+
+
 def _browser_playback_cache_path(source: Path) -> Path:
     stat = source.stat()
     key = "|".join((str(source.resolve()), str(stat.st_size), str(stat.st_mtime_ns)))
@@ -299,6 +311,7 @@ async def create_upload_meeting(
     target = media_dir / f"{uuid.uuid4().hex}{extension}"
     meeting_id = None
     max_bytes = config.audio.upload_max_file_size
+    expected_size = _expected_upload_size(request)
     try:
         try:
             size = await persist_upload(file, target, max_bytes=max_bytes)
@@ -315,6 +328,17 @@ async def create_upload_meeting(
         if size == 0:
             logger.warning("[upload] 拒绝上传: 上传文件为空 filename=%r", safe_filename)
             raise HTTPException(status_code=400, detail="上传文件为空")
+        if expected_size is not None and expected_size != size:
+            logger.warning(
+                "[upload] 拒绝上传: 文件大小不一致 filename=%r browser_size=%d saved_size=%d",
+                safe_filename,
+                expected_size,
+                size,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"文件上传不完整: 浏览器报告 {expected_size} 字节,后端收到 {size} 字节",
+            )
         if (
             extension != ".wav"
             and (extension in UPLOAD_TRANSCODE_REQUIRED_EXTENSIONS or audio_transcode_available())

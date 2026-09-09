@@ -1677,12 +1677,50 @@ function Invoke-NpmInstallWithMirrors($Npm) {
     throw "npm install failed with all registries. Last error: $lastError"
 }
 
+function Test-FrontendBuildCurrent {
+    $index = Get-Item -LiteralPath "web\dist\index.html" -ErrorAction SilentlyContinue
+    if (-not $index) {
+        return $false
+    }
+    $candidates = @()
+    foreach ($dir in @("web\src", "web\public")) {
+        if (Test-Path -LiteralPath $dir) {
+            $latest = Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTimeUtc -Descending |
+                Select-Object -First 1
+            if ($latest) {
+                $candidates += $latest
+            }
+        }
+    }
+    foreach ($file in @(
+        "web\index.html",
+        "web\package.json",
+        "web\package-lock.json",
+        "web\vite.config.ts",
+        "web\tsconfig.json",
+        "web\tsconfig.app.json",
+        "web\tsconfig.node.json"
+    )) {
+        $item = Get-Item -LiteralPath $file -ErrorAction SilentlyContinue
+        if ($item) {
+            $candidates += $item
+        }
+    }
+    $newest = $candidates | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if ($newest -and $newest.LastWriteTimeUtc -gt $index.LastWriteTimeUtc) {
+        Write-Warn "Frontend source is newer than web\dist; rebuilding."
+        return $false
+    }
+    return $true
+}
+
 function Ensure-FrontendBuild($Force, $Skip) {
     if ($Skip) {
         Write-Warn "Frontend build skipped."
         return
     }
-    if (-not $Force -and (Test-Path -LiteralPath "web\dist\index.html")) {
+    if (-not $Force -and (Test-FrontendBuildCurrent)) {
         Write-Ok "Frontend build already exists; skipping."
         return
     }
