@@ -1858,19 +1858,16 @@ function Test-ProjectFfmpegAvailable {
 }
 
 function Test-ImageioFfmpegAvailable([string]`$PythonExe) {
-    `$code = @"
-import os
-try:
-    import imageio_ffmpeg
-    path = imageio_ffmpeg.get_ffmpeg_exe()
-    print(path or "")
-    raise SystemExit(0 if path and os.path.isfile(path) else 1)
-except Exception as exc:
-    print(str(exc))
-    raise SystemExit(1)
-"@
-    `$output = @(& `$PythonExe -c `$code 2>`$null)
-    if (`$LASTEXITCODE -eq 0) {
+    `$code = "import importlib.util,os,sys; spec=importlib.util.find_spec('imageio_ffmpeg'); sys.exit(1) if spec is None else None; import imageio_ffmpeg; path=imageio_ffmpeg.get_ffmpeg_exe(); print(path or ''); sys.exit(0 if path and os.path.isfile(path) else 1)"
+    `$oldErrorActionPreference = `$ErrorActionPreference
+    try {
+        `$ErrorActionPreference = "Continue"
+        `$output = @(& `$PythonExe -c `$code 2>`$null)
+        `$exitCode = `$LASTEXITCODE
+    } finally {
+        `$ErrorActionPreference = `$oldErrorActionPreference
+    }
+    if (`$exitCode -eq 0) {
         if (`$output) {
             Write-Host "imageio-ffmpeg detected: `$(`$output[-1])"
         }
@@ -1898,8 +1895,15 @@ function Install-ImageioFfmpeg([string]`$PythonExe) {
         "https://pypi.org/simple"
     )) {
         Write-Host "Installing imageio-ffmpeg for MP4/WebM upload decoding: `$index"
-        & `$PythonExe -m pip install --disable-pip-version-check --prefer-binary @findLinks -i `$index "imageio-ffmpeg>=0.5.1,<1.0.0"
-        if (`$LASTEXITCODE -eq 0) {
+        `$oldErrorActionPreference = `$ErrorActionPreference
+        try {
+            `$ErrorActionPreference = "Continue"
+            & `$PythonExe -m pip install --disable-pip-version-check --prefer-binary @findLinks -i `$index "imageio-ffmpeg>=0.5.1,<1.0.0"
+            `$exitCode = `$LASTEXITCODE
+        } finally {
+            `$ErrorActionPreference = `$oldErrorActionPreference
+        }
+        if (`$exitCode -eq 0) {
             return `$true
         }
         Write-Warning "imageio-ffmpeg install failed from `$index"
