@@ -53,15 +53,25 @@ def _rocm_safe_funasr_versions() -> set[str]:
     return versions or set(_ROCM_KNOWN_STABLE_FUNASR_VERSIONS)
 
 
+def _rocm_funasr_gpu_allowed() -> bool:
+    if _env_true("ASR_FUNASR_ALLOW_ROCM_GPU"):
+        return True
+    version = _installed_funasr_version()
+    return bool(version and version in _rocm_safe_funasr_versions())
+
+
 def _warn_rocm_funasr_cpu_once() -> None:
     global _ROCM_FUNASR_WARNING_EMITTED
     if _ROCM_FUNASR_WARNING_EMITTED:
         return
     _ROCM_FUNASR_WARNING_EMITTED = True
+    version = _installed_funasr_version() or "unknown"
     logger.warning(
         "[FunASR] 检测到 AMD ROCm PyTorch。Windows ROCm 下 FunASR GPU "
-        "加载可能触发 native 崩溃,默认改用 CPU。若确认当前驱动/模型稳定,"
-        "可设置 ASR_FUNASR_ALLOW_ROCM_GPU=true 强制使用 ROCm GPU。"
+        "加载可能触发 native 崩溃,当前 funasr=%s 未在稳定白名单内,默认改用 CPU。"
+        "若确认当前驱动/模型稳定,可设置 ASR_FUNASR_ALLOW_ROCM_GPU=true "
+        "强制使用 ROCm GPU,或设置 ASR_FUNASR_ROCM_SAFE_VERSIONS。",
+        version,
     )
 
 
@@ -147,7 +157,7 @@ class FunASREngine:
             try:
                 import torch
                 if torch.cuda.is_available():
-                    if _torch_uses_rocm(torch) and not _env_true("ASR_FUNASR_ALLOW_ROCM_GPU"):
+                    if _torch_uses_rocm(torch) and not _rocm_funasr_gpu_allowed():
                         _warn_rocm_funasr_cpu_once()
                         return "cpu"
                     return "cuda:0"
@@ -159,7 +169,11 @@ class FunASREngine:
         if requested == "cuda":
             try:
                 import torch
-                if torch.cuda.is_available() and _torch_uses_rocm(torch) and not _env_true("ASR_FUNASR_ALLOW_ROCM_GPU"):
+                if (
+                    torch.cuda.is_available()
+                    and _torch_uses_rocm(torch)
+                    and not _rocm_funasr_gpu_allowed()
+                ):
                     _warn_rocm_funasr_cpu_once()
                     return "cpu"
             except Exception:

@@ -227,13 +227,36 @@ def test_funasr_rocm_cuda_defaults_to_cpu(monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.delenv("ASR_FUNASR_ALLOW_ROCM_GPU", raising=False)
+    monkeypatch.setenv("ASR_FUNASR_ROCM_SAFE_VERSIONS", "1.4.1")
 
     from engine.asr import funasr_engine
     from engine.asr.funasr_engine import FunASREngine
 
     funasr_engine._ROCM_FUNASR_WARNING_EMITTED = False
+    monkeypatch.setattr(funasr_engine, "_installed_funasr_version", lambda: "1.4.13")
     assert FunASREngine._resolve_device("auto") == "cpu"
     assert FunASREngine._resolve_device("cuda") == "cpu"
+
+
+def test_funasr_rocm_cuda_allows_safe_funasr_version(monkeypatch):
+    fake_torch = types.SimpleNamespace(
+        version=types.SimpleNamespace(hip="7.2.1"),
+        cuda=types.SimpleNamespace(is_available=lambda: True),
+        backends=types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: False)
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.delenv("ASR_FUNASR_ALLOW_ROCM_GPU", raising=False)
+    monkeypatch.setenv("ASR_FUNASR_ROCM_SAFE_VERSIONS", "1.4.1")
+
+    from engine.asr import funasr_engine
+    from engine.asr.funasr_engine import FunASREngine
+
+    monkeypatch.setattr(funasr_engine, "_installed_funasr_version", lambda: "1.4.1")
+
+    assert FunASREngine._resolve_device("auto") == "cuda:0"
+    assert FunASREngine._resolve_device("cuda") == "cuda:0"
 
 
 def test_funasr_rocm_cuda_can_be_forced(monkeypatch):

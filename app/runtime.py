@@ -5,6 +5,7 @@ import asyncio
 import importlib.metadata
 import inspect
 import logging
+import os
 import shutil
 import threading
 import time
@@ -31,6 +32,22 @@ def _major_minor(version: Optional[str]) -> Optional[tuple[int, int]]:
         return int(major), int(minor)
     except (TypeError, ValueError):
         return None
+
+
+def _ffmpeg_available() -> bool:
+    for key in ("FFMPEG_BINARY", "FFMPEG_PATH"):
+        value = os.environ.get(key)
+        if value and os.path.isfile(value):
+            return True
+    if shutil.which("ffmpeg") is not None:
+        return True
+    try:
+        import imageio_ffmpeg
+
+        path = imageio_ffmpeg.get_ffmpeg_exe()
+        return bool(path and os.path.isfile(path))
+    except Exception:
+        return False
 
 
 @dataclass(frozen=True)
@@ -60,7 +77,7 @@ def diagnose_audio_dependencies() -> AudioDependencyReport:
     torchvision = _package_version("torchvision")
     pyannote = _package_version("pyannote.audio")
     torchcodec = _package_version("torchcodec")
-    ffmpeg = shutil.which("ffmpeg") is not None
+    ffmpeg = _ffmpeg_available()
 
     compatible = True
     problems: list[str] = []

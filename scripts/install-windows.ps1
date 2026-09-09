@@ -1982,9 +1982,23 @@ function Get-PortFromUrl([string]`$TargetUrl) {
     }
 }
 
+function Set-ProjectFfmpegEnvironment([string]`$FfmpegPath) {
+    if (-not `$FfmpegPath -or -not (Test-Path -LiteralPath `$FfmpegPath)) {
+        return
+    }
+    `$ffmpegDir = Split-Path -Parent `$FfmpegPath
+    `$env:FFMPEG_BINARY = `$FfmpegPath
+    `$env:FFMPEG_PATH = `$FfmpegPath
+    if (`$ffmpegDir -and -not (`$env:PATH -split ";" | Where-Object { `$_ -eq `$ffmpegDir })) {
+        `$env:PATH = "`$ffmpegDir;`$env:PATH"
+    }
+}
+
 function Test-ProjectFfmpegAvailable {
-    if (Get-Command "ffmpeg" -ErrorAction SilentlyContinue) {
-        Write-Host "FFmpeg detected in PATH."
+    `$cmd = Get-Command "ffmpeg" -ErrorAction SilentlyContinue
+    if (`$cmd) {
+        Set-ProjectFfmpegEnvironment `$cmd.Source
+        Write-Host "FFmpeg detected in PATH: `$(`$cmd.Source)"
         return `$true
     }
     `$ffmpegExe = if (`$IsWindows -or `$env:OS -eq "Windows_NT") { "ffmpeg.exe" } else { "ffmpeg" }
@@ -1995,6 +2009,7 @@ function Test-ProjectFfmpegAvailable {
         (Join-Path `$Root "ffmpeg\bin\`$ffmpegExe")
     )) {
         if (Test-Path -LiteralPath `$candidate) {
+            Set-ProjectFfmpegEnvironment `$candidate
             Write-Host "Project FFmpeg detected: `$candidate"
             return `$true
         }
@@ -2014,6 +2029,7 @@ function Test-ImageioFfmpegAvailable([string]`$PythonExe) {
     }
     if (`$exitCode -eq 0) {
         if (`$output) {
+            Set-ProjectFfmpegEnvironment `$output[-1]
             Write-Host "imageio-ffmpeg detected: `$(`$output[-1])"
         }
         return `$true
