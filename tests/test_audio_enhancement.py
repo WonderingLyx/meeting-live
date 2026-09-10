@@ -5,6 +5,7 @@ import numpy as np
 
 def _set_enhancement_defaults(config):
     config.audio.enhancement_enabled = True
+    config.audio.enhancement_profile = "meeting"
     config.audio.enhancement_high_pass_hz = 0.0
     config.audio.enhancement_low_pass_hz = 0.0
     config.audio.enhancement_noise_reduction = 0.45
@@ -12,6 +13,13 @@ def _set_enhancement_defaults(config):
     config.audio.enhancement_target_rms = 0.005
     config.audio.enhancement_max_gain = 1.0
     config.audio.enhancement_max_block_seconds = 30.0
+    config.audio.enhancement_compression_threshold = 0.12
+    config.audio.enhancement_compression_ratio = 2.5
+    config.audio.overlap_detection_enabled = True
+    config.audio.overlap_window_seconds = 0.8
+    config.audio.overlap_hop_seconds = 0.2
+    config.audio.overlap_threshold = 0.68
+    config.audio.overlap_min_duration = 0.45
 
 
 def test_enhancement_disabled_returns_sanitized_audio():
@@ -59,3 +67,25 @@ def test_spectral_gate_reduces_stationary_noise_when_gain_is_capped():
     result = enhance_audio_for_models(noise_only, 16000)
 
     assert audio_rms(result) < audio_rms(noise_only)
+
+
+def test_quality_report_marks_bad_audio():
+    from app.services.audio_enhancement import audio_quality_report
+
+    silence = np.zeros(16000, dtype=np.float32)
+
+    result = audio_quality_report(silence, 16000)
+
+    assert result["label"] == "mostly_silent"
+    assert result["score"] < 0.5
+
+
+def test_overlap_detection_can_be_disabled():
+    from app.config import config
+    from app.services.audio_enhancement import detect_overlapped_speech
+
+    _set_enhancement_defaults(config)
+    config.audio.overlap_detection_enabled = False
+    audio = np.random.default_rng(9).normal(0.0, 0.05, 16000 * 2).astype(np.float32)
+
+    assert detect_overlapped_speech(audio, 16000) == []

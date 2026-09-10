@@ -345,6 +345,9 @@ class MeetingRepository:
         speaker_label: str | None = None,
         confidence: float | None = None,
         words: list[dict] | None = None,
+        overlap_flag: int | bool = 0,
+        audio_quality: str | None = None,
+        quality_score: float | None = None,
     ) -> int:
         with self.db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -356,12 +359,16 @@ class MeetingRepository:
             cursor = conn.execute(
                 """INSERT INTO transcript_segments
                    (meeting_id, segment_index, meeting_speaker_id, text, start_time,
-                    end_time, confidence, words_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    end_time, confidence, words_json, overlap_flag, audio_quality,
+                    quality_score)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     meeting_id, segment_index, meeting_speaker_id, text,
                     start_time, end_time, confidence,
                     json.dumps(words, ensure_ascii=False) if words else None,
+                    1 if overlap_flag else 0,
+                    audio_quality,
+                    quality_score,
                 ),
             )
             conn.commit()
@@ -392,6 +399,9 @@ class MeetingRepository:
                     "speaker_label": segment.get("speaker_label"),
                     "confidence": segment.get("confidence"),
                     "words": segment.get("words"),
+                    "overlap_flag": 1 if segment.get("overlap_flag") else 0,
+                    "audio_quality": segment.get("audio_quality"),
+                    "quality_score": segment.get("quality_score"),
                 }
             )
 
@@ -478,8 +488,9 @@ class MeetingRepository:
                     cursor = conn.execute(
                         """INSERT INTO transcript_segments
                            (meeting_id, segment_index, meeting_speaker_id, text,
-                            start_time, end_time, confidence, words_json)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                            start_time, end_time, confidence, words_json,
+                            overlap_flag, audio_quality, quality_score)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             meeting_id,
                             segment["segment_index"],
@@ -493,6 +504,9 @@ class MeetingRepository:
                             json.dumps(words, ensure_ascii=False)
                             if words is not None
                             else None,
+                            segment["overlap_flag"],
+                            segment["audio_quality"],
+                            segment["quality_score"],
                         ),
                     )
                     inserted_ids.append(cursor.lastrowid)
@@ -542,6 +556,9 @@ class MeetingRepository:
         speaker_label: str | None = None,
         confidence: float | None = None,
         words: list[dict] | None = None,
+        overlap_flag: int | bool = 0,
+        audio_quality: str | None = None,
+        quality_score: float | None = None,
     ) -> int:
         """Append one final realtime segment using a repository-owned index.
 
@@ -565,12 +582,16 @@ class MeetingRepository:
             cursor = conn.execute(
                 """INSERT INTO transcript_segments
                    (meeting_id, segment_index, meeting_speaker_id, text, start_time,
-                    end_time, confidence, words_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    end_time, confidence, words_json, overlap_flag, audio_quality,
+                    quality_score)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     meeting_id, next_index, meeting_speaker_id, text, start_time,
                     end_time, confidence,
                     json.dumps(words, ensure_ascii=False) if words else None,
+                    1 if overlap_flag else 0,
+                    audio_quality,
+                    quality_score,
                 ),
             )
             conn.execute(

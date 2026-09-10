@@ -26,9 +26,13 @@
 服务默认在音频进入 ASR、声纹匹配和上传说话人分离模型前启用轻量人声增强。原始录音文件不会被覆盖，回放仍使用原始录音。常用调节项在 `.env` 中：
 
 - `AUDIO_ENHANCEMENT_ENABLED=true`：总开关。
+- `AUDIO_ENHANCEMENT_PROFILE=meeting`：增强档位。`light` 更保真，`meeting` 适合常规会议，`aggressive` 适合底噪明显但可能产生轻微金属音。
 - `AUDIO_ENHANCEMENT_NOISE_REDUCTION=0.35`：降噪强度，麦克风底噪大可试 `0.45`，出现金属音则降到 `0.2`。
 - `AUDIO_ENHANCEMENT_TARGET_RMS=0.08`：目标音量，收音太小可试 `0.1`。
 - `AUDIO_ENHANCEMENT_MAX_GAIN=8.0`：最大自动增益，环境嘈杂时不要调太高。
+- `AUDIO_ENHANCEMENT_COMPRESSION_RATIO=2.5`：动态压缩比例，用于缩小远近说话人的音量差。
+- `AUDIO_OVERLAP_DETECTION_ENABLED=true`：保存“疑似多人同时说话”标记，会议详情页会显示复核标签。
+- `AUDIO_OVERLAP_THRESHOLD=0.68`：重叠检测阈值，越低越敏感；噪声环境误报多时调高到 `0.75`。
 
 ## 纪要与导出
 

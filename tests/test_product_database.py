@@ -135,6 +135,26 @@ def test_v3_alpha_schema_adds_voice_quality_fields_in_place(tmp_path):
     assert {"effective_speech_sec", "audio_sha256"} <= columns
 
 
+def test_v5_schema_adds_transcript_audio_diagnostics_in_place(tmp_path):
+    path = tmp_path / "schema-v5.db"
+    db = Database(str(path), create_default_admin=False)
+    db.init_schema()
+    with db.connect() as conn:
+        conn.execute("ALTER TABLE transcript_segments DROP COLUMN overlap_flag")
+        conn.execute("ALTER TABLE transcript_segments DROP COLUMN audio_quality")
+        conn.execute("ALTER TABLE transcript_segments DROP COLUMN quality_score")
+        conn.execute("UPDATE product_meta SET value = '5' WHERE key = 'schema_version'")
+        conn.commit()
+
+    db.init_schema()
+
+    with db.connect() as conn:
+        version = conn.execute("SELECT value FROM product_meta").fetchone()[0]
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(transcript_segments)")}
+    assert version == CURRENT_SCHEMA_VERSION
+    assert {"overlap_flag", "audio_quality", "quality_score"} <= columns
+
+
 def test_concurrent_duplicate_voice_samples_have_domain_error(product_repos, tmp_path):
     _meetings, _jobs, people = product_repos
     person_id = people.create("并发样本")
@@ -241,6 +261,30 @@ def test_atomic_replacement_records_refined_manifest(product_repos):
         "version": 1,
         "strategy": "transcription-only",
     }
+
+
+def test_transcript_replacement_persists_audio_diagnostics(product_repos):
+    meetings, _jobs, _people = product_repos
+    meeting_id = meetings.create(source="upload", title="audio diagnostics")
+
+    meetings.replace_generated_transcript(
+        meeting_id,
+        [{
+            "segment_index": 0,
+            "text": "两个人同时说话",
+            "start_time": 0.0,
+            "end_time": 2.0,
+            "speaker_label": None,
+            "overlap_flag": 1,
+            "audio_quality": "overlap",
+            "quality_score": 0.62,
+        }],
+    )
+
+    segment = meetings.detail(meeting_id)["segments"][0]
+    assert segment["overlap_flag"] == 1
+    assert segment["audio_quality"] == "overlap"
+    assert segment["quality_score"] == 0.62
 
 
 def test_meeting_detail_uses_anonymous_speaker_then_confirmed_person(product_repos):

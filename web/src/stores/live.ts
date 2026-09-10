@@ -23,6 +23,9 @@ export interface LiveSegment {
   timebase?: 'meeting'
   isFinal?: boolean
   speakerState?: 'unknown' | 'provisional' | 'final'
+  overlapFlag?: boolean
+  audioQuality?: string | null
+  qualityScore?: number | null
 }
 
 export interface LiveDebugState {
@@ -170,6 +173,9 @@ export const useLiveStore = defineStore('live', () => {
         placeholder.isFinal = asr.is_final
         placeholder.speakerState = asr.speaker_state
         if (typeof asr.score === 'number') placeholder.score = asr.score
+        placeholder.overlapFlag = Boolean(asr.overlap_flag)
+        placeholder.audioQuality = asr.audio_quality ?? null
+        placeholder.qualityScore = typeof asr.quality_score === 'number' ? asr.quality_score : null
         // 启动打字机
         const fullText = asr.text
         let i = 0
@@ -205,6 +211,11 @@ export const useLiveStore = defineStore('live', () => {
         last.isFinal = asr.is_final
         last.speakerState = asr.speaker_state
         if (typeof asr.score === 'number') last.score = asr.score
+        last.overlapFlag = Boolean(last.overlapFlag || asr.overlap_flag)
+        last.audioQuality = last.overlapFlag ? 'overlap' : (asr.audio_quality ?? last.audioQuality ?? null)
+        if (typeof asr.quality_score === 'number') {
+          last.qualityScore = last.qualityScore == null ? asr.quality_score : Math.min(last.qualityScore, asr.quality_score)
+        }
         if (last.typewriterId) {
           clearTimeout(last.typewriterId)
           last.typewriterId = undefined
@@ -225,6 +236,9 @@ export const useLiveStore = defineStore('live', () => {
           timebase: asr.timebase,
           isFinal: asr.is_final,
           speakerState: asr.speaker_state,
+          overlapFlag: Boolean(asr.overlap_flag),
+          audioQuality: asr.audio_quality ?? null,
+          qualityScore: typeof asr.quality_score === 'number' ? asr.quality_score : null,
         }
         segments.value.push(target)
       }

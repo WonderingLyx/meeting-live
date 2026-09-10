@@ -8,7 +8,7 @@
 //     finalized meeting-time utterance | control event | system event
 //   close(4401) = 鉴权失败
 
-export type FinalUtterance = { speaker: string; text: string; time?: string; start: number; end: number; timebase: 'meeting'; is_final: true; speaker_state: 'unknown'|'provisional'|'final'; words?: { text: string; start: number; end: number }[]; score?: number; seq?: number }
+export type FinalUtterance = { speaker: string; text: string; time?: string; start: number; end: number; timebase: 'meeting'; is_final: true; speaker_state: 'unknown'|'provisional'|'final'; words?: { text: string; start: number; end: number }[]; score?: number; seq?: number; overlap_flag?: boolean|number; audio_quality?: string|null; quality_score?: number|null }
 
 export type AsrMessage =
   | FinalUtterance

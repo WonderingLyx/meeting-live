@@ -151,6 +151,7 @@ class AudioConfig:
     max_gain: float = 10.0
     # 模型前音频增强
     enhancement_enabled: bool = True
+    enhancement_profile: str = "meeting"
     enhancement_high_pass_hz: float = 80.0
     enhancement_low_pass_hz: float = 7600.0
     enhancement_noise_reduction: float = 0.35
@@ -158,6 +159,13 @@ class AudioConfig:
     enhancement_target_rms: float = 0.08
     enhancement_max_gain: float = 8.0
     enhancement_max_block_seconds: float = 30.0
+    enhancement_compression_threshold: float = 0.12
+    enhancement_compression_ratio: float = 2.5
+    overlap_detection_enabled: bool = True
+    overlap_window_seconds: float = 0.8
+    overlap_hop_seconds: float = 0.2
+    overlap_threshold: float = 0.68
+    overlap_min_duration: float = 0.45
     # 队列
     queue_size: int = 8
     skip_frame_threshold: int = 3
@@ -199,6 +207,7 @@ class AudioConfig:
             target_rms=get_env_float("AUDIO_TARGET_RMS", 0.08),
             max_gain=get_env_float("AUDIO_MAX_GAIN", 10.0),
             enhancement_enabled=get_env_bool("AUDIO_ENHANCEMENT_ENABLED", True),
+            enhancement_profile=get_env_str("AUDIO_ENHANCEMENT_PROFILE", "meeting").lower(),
             enhancement_high_pass_hz=get_env_float("AUDIO_ENHANCEMENT_HIGH_PASS_HZ", 80.0),
             enhancement_low_pass_hz=get_env_float("AUDIO_ENHANCEMENT_LOW_PASS_HZ", 7600.0),
             enhancement_noise_reduction=get_env_float("AUDIO_ENHANCEMENT_NOISE_REDUCTION", 0.35),
@@ -206,6 +215,13 @@ class AudioConfig:
             enhancement_target_rms=get_env_float("AUDIO_ENHANCEMENT_TARGET_RMS", get_env_float("AUDIO_TARGET_RMS", 0.08)),
             enhancement_max_gain=get_env_float("AUDIO_ENHANCEMENT_MAX_GAIN", 8.0),
             enhancement_max_block_seconds=get_env_float("AUDIO_ENHANCEMENT_MAX_BLOCK_SECONDS", 30.0),
+            enhancement_compression_threshold=get_env_float("AUDIO_ENHANCEMENT_COMPRESSION_THRESHOLD", 0.12),
+            enhancement_compression_ratio=get_env_float("AUDIO_ENHANCEMENT_COMPRESSION_RATIO", 2.5),
+            overlap_detection_enabled=get_env_bool("AUDIO_OVERLAP_DETECTION_ENABLED", True),
+            overlap_window_seconds=get_env_float("AUDIO_OVERLAP_WINDOW_SECONDS", 0.8),
+            overlap_hop_seconds=get_env_float("AUDIO_OVERLAP_HOP_SECONDS", 0.2),
+            overlap_threshold=get_env_float("AUDIO_OVERLAP_THRESHOLD", 0.68),
+            overlap_min_duration=get_env_float("AUDIO_OVERLAP_MIN_DURATION", 0.45),
             queue_size=get_env_int("AUDIO_QUEUE_SIZE", 8),
             skip_frame_threshold=get_env_int("AUDIO_SKIP_FRAME_THRESHOLD", 3),
             queue_monitor_interval=get_env_float("AUDIO_QUEUE_MONITOR_INTERVAL", 5.0),

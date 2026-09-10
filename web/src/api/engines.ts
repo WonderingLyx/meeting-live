@@ -104,6 +104,18 @@ export interface SpeakerSettings {
   switch_result?: { success: boolean; engine_type: string; error?: string }
 }
 
+export interface AudioSettings {
+  enabled: boolean
+  profile: 'light' | 'meeting' | 'aggressive' | string
+  noise_reduction: number
+  target_rms: number
+  max_gain: number
+  compression_ratio: number
+  overlap_detection_enabled: boolean
+  overlap_threshold: number
+  env_path?: string
+}
+
 export interface ModelSourceProvider {
   key: string
   label: string
@@ -223,6 +235,20 @@ export async function saveAsrSettings(payload: {
 export async function getSpeakerSettings() {
   return call<SpeakerSettings>({
     url: '/v1/speaker/settings',
+  })
+}
+
+export async function getAudioSettings() {
+  return call<AudioSettings>({
+    url: '/v1/audio/settings',
+  })
+}
+
+export async function saveAudioSettings(payload: AudioSettings) {
+  return call<AudioSettings>({
+    url: '/v1/audio/settings',
+    method: 'PUT',
+    data: payload,
   })
 }
 

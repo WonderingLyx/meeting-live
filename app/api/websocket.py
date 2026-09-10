@@ -12,7 +12,11 @@ from fastapi import APIRouter, WebSocket
 from app.config import config
 from app.constants import SYSTEM_SPEAKER
 from app.services import SessionContext
-from app.services.audio_enhancement import enhance_audio_for_models
+from app.services.audio_enhancement import (
+    audio_quality_report,
+    detect_overlapped_speech,
+    enhance_audio_for_models,
+)
 from app.runtime import EngineSnapshot
 from app.services.realtime_auth import authenticate_websocket, ws_revalidate
 from engine.speaker.speaker_factory import get_engine_info
@@ -734,6 +738,19 @@ async def _process_speech_segment(
         sample_rate,
         profile="live_segment",
     )
+    quality_report, overlap_regions = await asyncio.gather(
+        asyncio.to_thread(audio_quality_report, model_audio, sample_rate),
+        asyncio.to_thread(detect_overlapped_speech, model_audio, sample_rate),
+    )
+    overlap_flag = bool(overlap_regions)
+    quality_label = str(quality_report.get("label") or "ok")
+    audio_quality = "overlap" if overlap_flag else (
+        None if quality_label == "ok" else quality_label
+    )
+    try:
+        quality_score = float(quality_report.get("score"))
+    except (TypeError, ValueError):
+        quality_score = None
 
     # Cancellation of asyncio.to_thread does not stop its worker. Shield the
     # pair and wait for it before releasing the inference slot so a subsequent
@@ -844,6 +861,9 @@ async def _process_speech_segment(
                     speaker_label=spk_id,
                     confidence=spk_score,
                     words=absolute_words,
+                    overlap_flag=1 if overlap_flag else 0,
+                    audio_quality=audio_quality,
+                    quality_score=quality_score,
                 )
             except Exception as e:
                 logger.warning(f"[WS] 实时会议存档失败: {e}")
@@ -866,6 +886,9 @@ async def _process_speech_segment(
                     "speaker_state": (
                         "unknown" if spk_id == "Spk_unknown" else "provisional"
                     ),
+                    "overlap_flag": overlap_flag,
+                    "audio_quality": audio_quality,
+                    "quality_score": quality_score,
                 }
                 if incremental_words:
                     msg["words"] = absolute_words

@@ -63,6 +63,7 @@ def _enhancement_cache_signature() -> str:
     audio = config.audio
     names = (
         "enhancement_enabled",
+        "enhancement_profile",
         "enhancement_high_pass_hz",
         "enhancement_low_pass_hz",
         "enhancement_noise_reduction",
@@ -70,6 +71,8 @@ def _enhancement_cache_signature() -> str:
         "enhancement_target_rms",
         "enhancement_max_gain",
         "enhancement_max_block_seconds",
+        "enhancement_compression_threshold",
+        "enhancement_compression_ratio",
     )
     return "|".join(f"{name}={getattr(audio, name, '')}" for name in names)
 

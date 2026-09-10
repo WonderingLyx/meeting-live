@@ -12,7 +12,12 @@ from typing import Any
 import numpy as np
 
 from app.config import config
-from app.services.audio_enhancement import enhance_audio_for_models
+from app.services.audio_enhancement import (
+    audio_quality_report,
+    detect_overlapped_speech,
+    enhance_audio_for_models,
+    enhancement_metadata,
+)
 from app.services.audio_files import split_audio_into_chunks
 from app.services.speaker_alignment import align_speakers_to_segments
 
@@ -316,6 +321,54 @@ def _speaker_provenance(engine: object) -> dict[str, str]:
     return result
 
 
+def _overlap_seconds(start: float, end: float, regions: list[dict[str, float]]) -> float:
+    total = 0.0
+    for region in regions:
+        total += max(0.0, min(end, float(region["end"])) - max(start, float(region["start"])))
+    return total
+
+
+def _annotate_audio_diagnostics(
+    segments: list[dict],
+    overlap_regions: list[dict[str, float]],
+    quality: dict[str, Any],
+) -> list[dict]:
+    label = str(quality.get("label") or "ok")
+    try:
+        quality_score = round(float(quality.get("score")), 4)
+    except (TypeError, ValueError):
+        quality_score = None
+    annotated: list[dict] = []
+    for segment in segments:
+        start = float(segment.get("start", segment.get("start_time", 0)) or 0)
+        end = float(segment.get("end", segment.get("end_time", start)) or start)
+        duration = max(0.0, end - start)
+        overlap = _overlap_seconds(start, end, overlap_regions)
+        overlap_flag = overlap >= max(0.2, min(0.8, duration * 0.25))
+        audio_quality = "overlap" if overlap_flag else (None if label == "ok" else label)
+        annotated.append({
+            **segment,
+            "overlap_flag": 1 if overlap_flag else 0,
+            "audio_quality": audio_quality,
+            "quality_score": (
+                min(quality_score, 0.65)
+                if overlap_flag and quality_score is not None
+                else quality_score
+            ),
+        })
+    return annotated
+
+
+def _overlap_summary(regions: list[dict[str, float]]) -> dict[str, Any]:
+    total = sum(max(0.0, float(region["end"]) - float(region["start"])) for region in regions)
+    return {
+        "enabled": bool(config.audio.overlap_detection_enabled),
+        "region_count": len(regions),
+        "total_seconds": round(total, 3),
+        "regions": regions[:100],
+    }
+
+
 @dataclass
 class MeetingProcessor:
     meeting_repo: object
@@ -343,20 +396,32 @@ class MeetingProcessor:
         if len(audio) == 0:
             raise PermanentJobError("audio contains no samples")
         audio = np.asarray(audio, dtype=np.float32)
-        duration = len(audio) / config.audio.sample_rate
+        sample_rate = config.audio.sample_rate
+        duration = len(audio) / sample_rate
         self.meeting_repo.update(
             meeting_id, status="processing", duration_sec=duration, error_message=None
         )
-        model_audio = await asyncio.to_thread(
+        raw_quality = await asyncio.to_thread(audio_quality_report, audio, sample_rate)
+        asr_audio = await asyncio.to_thread(
             enhance_audio_for_models,
             audio,
-            config.audio.sample_rate,
-            profile="upload_meeting",
+            sample_rate,
+            profile="asr",
+        )
+        speaker_audio = await asyncio.to_thread(
+            enhance_audio_for_models,
+            audio,
+            sample_rate,
+            profile="speaker",
+        )
+        asr_quality = await asyncio.to_thread(audio_quality_report, asr_audio, sample_rate)
+        overlap_regions = await asyncio.to_thread(
+            detect_overlapped_speech, asr_audio, sample_rate
         )
 
         chunks = split_audio_into_chunks(
-            model_audio,
-            config.audio.sample_rate,
+            asr_audio,
+            sample_rate,
             config.audio.upload_chunk_duration,
             config.audio.upload_overlap_duration,
         )
@@ -371,7 +436,7 @@ class MeetingProcessor:
                     engines.asr.run_asr(chunk, use_preprocessing=False)
                 )
             result = normalize_offline_asr_result(
-                result, audio_duration=len(chunk) / config.audio.sample_rate
+                result, audio_duration=len(chunk) / sample_rate
             )
             observed_granularities.add(str(result.get("timestamp_granularity", "none")))
             if result.get("language"):
@@ -386,6 +451,9 @@ class MeetingProcessor:
             asr_segments.extend(
                 segment for segment in chunk_segments if segment["text"].strip()
             )
+        asr_segments = _annotate_audio_diagnostics(
+            asr_segments, overlap_regions, asr_quality
+        )
 
         final_segments = asr_segments
         alignment_method = "none"
@@ -407,6 +475,9 @@ class MeetingProcessor:
                             "speaker_label": None,
                             "confidence": segment.get("confidence"),
                             "words": segment.get("words"),
+                            "overlap_flag": segment.get("overlap_flag", 0),
+                            "audio_quality": segment.get("audio_quality"),
+                            "quality_score": segment.get("quality_score"),
                         }
                         for index, segment in enumerate(asr_segments)
                         if str(segment.get("text") or "").strip()
@@ -417,10 +488,13 @@ class MeetingProcessor:
                 final_segments, diarization_status, diarization_error = (
                     await await_uninterruptible(
                         asyncio.to_thread(
-                            self._offline_diarize, audio_path, asr_segments, model_audio,
+                            self._offline_diarize, audio_path, asr_segments, speaker_audio,
                         )
                     )
                 )
+            final_segments = _annotate_audio_diagnostics(
+                final_segments, overlap_regions, asr_quality
+            )
             self.meeting_repo.update(
                 meeting_id,
                 diarization_status=diarization_status,
@@ -454,6 +528,13 @@ class MeetingProcessor:
                 "status": diarization_status if meeting.get("processing_mode") == "meeting" else "not_requested",
                 "alignment": alignment_method,
             },
+            "audio_processing": {
+                "raw_quality": raw_quality,
+                "asr_quality": asr_quality,
+                "asr_enhancement": enhancement_metadata("asr"),
+                "speaker_enhancement": enhancement_metadata("speaker"),
+                "overlap": _overlap_summary(overlap_regions),
+            },
             "speaker_identity": _speaker_provenance(engines.speaker) if engines.speaker is not None else None,
             "generated_at": generated_at,
         }
@@ -466,6 +547,9 @@ class MeetingProcessor:
                 "speaker_label": segment.get("speaker"),
                 "confidence": segment.get("confidence"),
                 "words": segment.get("words"),
+                "overlap_flag": segment.get("overlap_flag", 0),
+                "audio_quality": segment.get("audio_quality"),
+                "quality_score": segment.get("quality_score"),
             }
             for index, segment in enumerate(final_segments)
             if str(segment.get("text") or "").strip()
@@ -476,7 +560,7 @@ class MeetingProcessor:
         if self.people_repo is not None and engines.speaker is not None:
             try:
                 await self._match_known_people(
-                    meeting_id, model_audio, final_segments, engines.speaker
+                    meeting_id, speaker_audio, final_segments, engines.speaker
                 )
             except Exception:
                 logger.warning(

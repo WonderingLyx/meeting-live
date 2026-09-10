@@ -51,6 +51,18 @@ class SpeakerSettingsRequest(BaseModel):
     device: str = Field("auto", min_length=2, max_length=16)
 
 
+class AudioSettingsRequest(BaseModel):
+    """Audio preprocessing settings."""
+    enabled: bool = True
+    profile: str = Field("meeting", pattern="^(light|meeting|aggressive)$")
+    noise_reduction: float = Field(0.35, ge=0.0, le=0.95)
+    target_rms: float = Field(0.08, ge=0.005, le=0.5)
+    max_gain: float = Field(8.0, ge=1.0, le=30.0)
+    compression_ratio: float = Field(2.5, ge=1.0, le=10.0)
+    overlap_detection_enabled: bool = True
+    overlap_threshold: float = Field(0.68, ge=0.3, le=0.95)
+
+
 class ModelSourceTestRequest(BaseModel):
     section: str = Field(..., pattern="^(asr|speaker|diarization|face)$")
     provider: str = Field("custom", min_length=1, max_length=40)
@@ -469,6 +481,54 @@ def _speaker_settings_status(*, switch_result: dict[str, Any] | None = None) -> 
     if switch_result is not None:
         result["switch_result"] = switch_result
     return result
+
+
+def _audio_settings_status() -> dict[str, Any]:
+    audio = config.audio
+    return {
+        "enabled": bool(audio.enhancement_enabled),
+        "profile": audio.enhancement_profile,
+        "noise_reduction": audio.enhancement_noise_reduction,
+        "target_rms": audio.enhancement_target_rms,
+        "max_gain": audio.enhancement_max_gain,
+        "compression_ratio": audio.enhancement_compression_ratio,
+        "overlap_detection_enabled": bool(audio.overlap_detection_enabled),
+        "overlap_threshold": audio.overlap_threshold,
+        "env_path": str(ENV_PATH),
+    }
+
+
+@router.get("/v1/audio/settings")
+async def get_audio_settings():
+    """Get audio preprocessing settings."""
+    return _audio_settings_status()
+
+
+@router.put("/v1/audio/settings")
+async def update_audio_settings(body: AudioSettingsRequest):
+    """Update lightweight audio preprocessing settings."""
+    config.audio.enhancement_enabled = body.enabled
+    config.audio.enhancement_profile = body.profile
+    config.audio.enhancement_noise_reduction = body.noise_reduction
+    config.audio.enhancement_target_rms = body.target_rms
+    config.audio.enhancement_max_gain = body.max_gain
+    config.audio.enhancement_compression_ratio = body.compression_ratio
+    config.audio.overlap_detection_enabled = body.overlap_detection_enabled
+    config.audio.overlap_threshold = body.overlap_threshold
+    try:
+        _write_env_values({
+            "AUDIO_ENHANCEMENT_ENABLED": str(body.enabled).lower(),
+            "AUDIO_ENHANCEMENT_PROFILE": body.profile,
+            "AUDIO_ENHANCEMENT_NOISE_REDUCTION": str(body.noise_reduction),
+            "AUDIO_ENHANCEMENT_TARGET_RMS": str(body.target_rms),
+            "AUDIO_ENHANCEMENT_MAX_GAIN": str(body.max_gain),
+            "AUDIO_ENHANCEMENT_COMPRESSION_RATIO": str(body.compression_ratio),
+            "AUDIO_OVERLAP_DETECTION_ENABLED": str(body.overlap_detection_enabled).lower(),
+            "AUDIO_OVERLAP_THRESHOLD": str(body.overlap_threshold),
+        })
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to update .env: {exc}") from exc
+    return _audio_settings_status()
 
 
 @router.get("/v1/model-config")

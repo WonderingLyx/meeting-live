@@ -5,7 +5,7 @@ from pathlib import Path
 from contextlib import contextmanager
 
 logger = logging.getLogger("Matrix_DB")
-CURRENT_SCHEMA_VERSION = "5"
+CURRENT_SCHEMA_VERSION = "6"
 
 
 SCHEMA_SQL = """
@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS product_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO product_meta(key, value) VALUES ('schema_version', '5');
+INSERT OR IGNORE INTO product_meta(key, value) VALUES ('schema_version', '6');
 
 CREATE TABLE IF NOT EXISTS meetings (
     id                TEXT PRIMARY KEY,
@@ -128,6 +128,9 @@ CREATE TABLE IF NOT EXISTS transcript_segments (
     end_time           REAL NOT NULL,
     confidence         REAL,
     words_json         TEXT,
+    overlap_flag       INTEGER NOT NULL DEFAULT 0,
+    audio_quality      TEXT,
+    quality_score      REAL,
     manually_edited    INTEGER NOT NULL DEFAULT 0,
     created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -244,7 +247,7 @@ class Database:
         row = conn.execute(
             "SELECT value FROM product_meta WHERE key = 'schema_version'"
         ).fetchone()
-        if row is None or row[0] not in {"1", "2", "3", "4"}:
+        if row is None or row[0] not in {"1", "2", "3", "4", "5"}:
             return
         meeting_exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meetings'"
@@ -303,6 +306,23 @@ class Database:
                 )
             if "audio_sha256" not in sample_columns:
                 conn.execute("ALTER TABLE voice_samples ADD COLUMN audio_sha256 TEXT")
+        transcript_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_segments'"
+        ).fetchone()
+        if transcript_exists is not None:
+            transcript_columns = {
+                item[1]
+                for item in conn.execute("PRAGMA table_info(transcript_segments)").fetchall()
+            }
+            if "overlap_flag" not in transcript_columns:
+                conn.execute(
+                    "ALTER TABLE transcript_segments ADD COLUMN overlap_flag "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+            if "audio_quality" not in transcript_columns:
+                conn.execute("ALTER TABLE transcript_segments ADD COLUMN audio_quality TEXT")
+            if "quality_score" not in transcript_columns:
+                conn.execute("ALTER TABLE transcript_segments ADD COLUMN quality_score REAL")
         conn.execute(
             "UPDATE product_meta SET value = ? WHERE key = 'schema_version'",
             (CURRENT_SCHEMA_VERSION,),
@@ -369,6 +389,14 @@ class Database:
         if not {"effective_speech_sec", "audio_sha256"} <= sample_columns:
             raise RuntimeError(
                 "数据库结构缺少声音样本质量字段；请重启以完成 alpha schema 升级。"
+            )
+        transcript_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(transcript_segments)").fetchall()
+        }
+        if not {"overlap_flag", "audio_quality", "quality_score"} <= transcript_columns:
+            raise RuntimeError(
+                "数据库结构缺少音频诊断字段；请重启以完成 schema 升级。"
             )
         face_sample_exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_samples'"

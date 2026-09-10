@@ -5,6 +5,13 @@ export interface ProcessingManifest {
   strategy?: string
   asr?: { engine?: string; model?: string; timestamp_granularity?: string; language?: string }
   diarization?: { provider?: string; engine?: string; model?: string; status?: string; alignment?: string }
+  audio_processing?: {
+    raw_quality?: AudioQualityReport
+    asr_quality?: AudioQualityReport
+    asr_enhancement?: Record<string, unknown>
+    speaker_enhancement?: Record<string, unknown>
+    overlap?: { enabled?: boolean; region_count?: number; total_seconds?: number }
+  }
   speaker_identity?: { engine?: string; model_id?: string }
   generated_at?: string
 }
@@ -17,8 +24,9 @@ export interface FaceSampleUploadResult { id:string; person_id:string; embedding
 export interface Person { id:string; name:string; notes?:string; sample_count:number; face_sample_count?:number; total_sample_duration:number; meeting_count?:number }
 export interface PersonDetail extends Person { samples:VoiceSample[]; face_samples?:FaceSample[] }
 export type IdentityStatus = 'anonymous'|'suggested'|'auto_matched'|'confirmed'
+export interface AudioQualityReport { label?: string; score?: number; rms?: number; peak?: number; snr_db?: number|null; silence_ratio?: number; clipping_ratio?: number; dynamic_range_db?: number }
 export interface Speaker { id:string; label:string; person_id?:string; person_name?:string; confidence?:number; manually_confirmed:number; identity_status:IdentityStatus }
-export interface Segment { id:number; text:string; start_time:number; end_time:number; speaker_label?:string; person_name?:string; meeting_speaker_id?:string; manually_confirmed?:number; confidence?:number; manually_edited?:number; identity_status?:IdentityStatus }
+export interface Segment { id:number; text:string; start_time:number; end_time:number; speaker_label?:string; person_name?:string; meeting_speaker_id?:string; manually_confirmed?:number; confidence?:number; manually_edited?:number; identity_status?:IdentityStatus; overlap_flag?:number|boolean; audio_quality?:string|null; quality_score?:number|null }
 export interface MeetingNote {id:number;note_type:'summary'|'minutes'|'actions';content:string;source:string}
 export interface AttendanceRecord { id:string; meeting_id:string; person_id:string; person_name:string; source:'face'|'manual'; confidence?:number|null; first_seen_sec?:number|null; last_seen_sec?:number|null; frame_count:number; created_at:string; updated_at:string }
 export interface FaceDetection { face_index:number; bbox:number[]; detection_score:number; matched:boolean; person_id?:string|null; person_name?:string|null; confidence?:number|null; runner_up_confidence?:number|null; threshold:number; margin:number }

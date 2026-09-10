@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getAsrSettings, getEngines, getModelConfig, getModels, getSpeakerSettings, saveAsrSettings, saveSpeakerSettings, switchAsrEngine, switchEngine, testAsrEngine, testModelSource, type AsrInfo, type AsrSettings, type AsrTestResponse, type EngineInfo, type ModelConfigResponse, type ModelSourceProvider, type ModelsInfo, type SpeakerSettings } from '../api/engines'
+import { getAsrSettings, getAudioSettings, getEngines, getModelConfig, getModels, getSpeakerSettings, saveAsrSettings, saveAudioSettings, saveSpeakerSettings, switchAsrEngine, switchEngine, testAsrEngine, testModelSource, type AsrInfo, type AsrSettings, type AsrTestResponse, type AudioSettings, type EngineInfo, type ModelConfigResponse, type ModelSourceProvider, type ModelsInfo, type SpeakerSettings } from '../api/engines'
 import { getLlmSettings, getLlmStatus, saveLlmSettings, testLlmConnection, getLlmPrompts, saveLlmPrompts, listLlmModels, type LlmSettings, type LlmPrompts } from '../api/llm'
 import { getDiarizationSettings, saveDiarizationSettings, testDiarizationSettings, type DiarizationSettings, type DiarizationEngineInfo } from '../api/diarization'
 import { getFaceSettings, saveFaceSettings, testFaceSettings, type FaceSettings, type FaceModelInfo } from '../api/face'
@@ -34,6 +34,7 @@ const diarization = ref<DiarizationSettings | null>(null)
 const faceSettings = ref<FaceSettings | null>(null)
 const asrSettings = ref<AsrSettings | null>(null)
 const speakerSettings = ref<SpeakerSettings | null>(null)
+const audioSettings = ref<AudioSettings | null>(null)
 const modelConfig = ref<ModelConfigResponse | null>(null)
 const hfToken = ref('')
 const asrApiKey = ref('')
@@ -48,6 +49,7 @@ const savingFace = ref(false)
 const savingAsrConfig = ref(false)
 const savingAsrDevice = ref(false)
 const savingSpeaker = ref(false)
+const savingAudio = ref(false)
 const testingDiarization = ref(false)
 const testingFace = ref(false)
 const testingAsrSource = ref(false)
@@ -443,6 +445,14 @@ async function refreshSpeakerSettings() {
   }
 }
 
+async function refreshAudioSettings() {
+  try {
+    audioSettings.value = await getAudioSettings()
+  } catch {
+    audioSettings.value = null
+  }
+}
+
 async function refreshFaceSettings() {
   try {
     faceSettings.value = await getFaceSettings()
@@ -461,6 +471,7 @@ async function load() {
   await refreshModels()
   await refreshAsrSettings()
   await refreshSpeakerSettings()
+  await refreshAudioSettings()
   await refreshFaceSettings()
   try {
     diarization.value = await getDiarizationSettings()
@@ -657,6 +668,19 @@ async function saveSpeakerConfig() {
   } finally {
     switchingEngine.value = null
     savingSpeaker.value = false
+  }
+}
+
+async function saveAudioConfig() {
+  if (!audioSettings.value || savingAudio.value) return
+  try {
+    savingAudio.value = true
+    audioSettings.value = await saveAudioSettings(audioSettings.value)
+    window.toast?.('音频处理配置已保存', 'ok')
+  } catch (e) {
+    window.toast?.(`音频处理配置保存失败: ${e instanceof Error ? e.message : e}`, 'error')
+  } finally {
+    savingAudio.value = false
   }
 }
 
@@ -925,6 +949,64 @@ onUnmounted(() => {
       <article><b>03</b><h3>{{ t('product.settings.identity') }}</h3><p>{{ t('product.settings.identityHint') }}</p></article>
     </section>
     <div class="set-grid">
+
+    <!-- 音频处理 -->
+    <div v-if="audioSettings" class="set-row audio-row">
+      <div class="l">
+        <span>音频处理</span>
+        <em>AUDIO</em>
+      </div>
+      <div class="d">增强: {{ audioSettings.enabled ? audioSettings.profile : 'off' }} · 重叠检测: {{ audioSettings.overlap_detection_enabled ? 'on' : 'off' }}</div>
+      <div class="toggle-group">
+        <button type="button" :class="{ active: audioSettings.enabled && audioSettings.profile === 'light' }" @click="audioSettings.enabled=true;audioSettings.profile='light'">
+          <span class="r" />
+          <span>Light</span>
+        </button>
+        <button type="button" :class="{ active: audioSettings.enabled && audioSettings.profile === 'meeting' }" @click="audioSettings.enabled=true;audioSettings.profile='meeting'">
+          <span class="r" />
+          <span>Meeting</span>
+        </button>
+        <button type="button" :class="{ active: audioSettings.enabled && audioSettings.profile === 'aggressive' }" @click="audioSettings.enabled=true;audioSettings.profile='aggressive'">
+          <span class="r" />
+          <span>Aggressive</span>
+        </button>
+        <button type="button" :class="{ active: !audioSettings.enabled }" @click="audioSettings.enabled=false">
+          <span class="r" />
+          <span>Off</span>
+        </button>
+      </div>
+      <div class="llm-form compact-config audio-form">
+        <label>
+          <span>降噪强度</span>
+          <input v-model.number="audioSettings.noise_reduction" type="number" min="0" max="0.95" step="0.05" />
+        </label>
+        <label>
+          <span>目标音量</span>
+          <input v-model.number="audioSettings.target_rms" type="number" min="0.005" max="0.5" step="0.005" />
+        </label>
+        <label>
+          <span>最大增益</span>
+          <input v-model.number="audioSettings.max_gain" type="number" min="1" max="30" step="0.5" />
+        </label>
+        <label>
+          <span>压缩比例</span>
+          <input v-model.number="audioSettings.compression_ratio" type="number" min="1" max="10" step="0.1" />
+        </label>
+        <label class="inline-check">
+          <input v-model="audioSettings.overlap_detection_enabled" type="checkbox" />
+          <span>重叠说话标记</span>
+        </label>
+        <label>
+          <span>重叠阈值</span>
+          <input v-model.number="audioSettings.overlap_threshold" type="number" min="0.3" max="0.95" step="0.01" />
+        </label>
+      </div>
+      <div class="llm-options llm-actions">
+        <button class="btn primary sm" type="button" :disabled="savingAudio" @click="saveAudioConfig">
+          {{ savingAudio ? '保存中…' : '保存音频处理' }}
+        </button>
+      </div>
+    </div>
 
     <!-- ASR 引擎 -->
     <div class="set-row asr-row">
