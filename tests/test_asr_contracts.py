@@ -158,6 +158,27 @@ def test_sensevoice_zh_forces_chinese_language():
     assert result["language"] == "zh"
 
 
+def test_funasr_normalizes_sentence_info_sentence_text():
+    from engine.asr.funasr_engine import FunASREngine
+
+    engine = object.__new__(FunASREngine)
+    engine.kind = "sensevoice_spk"
+    engine._postprocess = None
+    engine.model = _FakeFunASRModel({
+        "text": "会议开始",
+        "sentence_info": [
+            {"sentence": "会议开始", "start": 0, "end": 980, "spk": 1},
+        ],
+    })
+
+    result = engine._transcribe_sync(np.zeros(16000, dtype=np.float32))
+
+    assert result["segments"] == [
+        {"text": "会议开始", "start": 0.0, "end": 0.98, "speaker": "1", "words": None}
+    ]
+    assert result["speaker_scope"] == "chunk"
+
+
 class _FakeFunASRModel:
     def __init__(self, result):
         self.result = result

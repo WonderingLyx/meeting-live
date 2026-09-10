@@ -93,7 +93,7 @@ AMD Windows ROCm 路线推荐直接运行：
 
 AMD 包会默认写入 `ASR_FUNASR_ALLOW_ROCM_GPU=false`。这是为了规避 FunASR 在部分 Windows ROCm 机器上加载 Paraformer/SenseVoice 时的 native 崩溃；PyTorch ROCm 仍安装可用，非 FunASR 路径可以继续按设置页测试 GPU。
 
-AMD 包还会默认写入 `ASR_FUNASR_ALLOW_ROCM_PARAFORMER=false` 和 `ASR_FUNASR_ROCM_SAFE_VERSIONS=1.4.1`。因此 `paraformer`、`paraformer_full`、`paraformer_large`、`paraformer_spk`、`paraformer_streaming` 在 FunASR 版本不是 1.4.1 时会被标记为不可用，避免点击切换后服务直接退出。安装脚本会把依赖修复到 1.4.1；要强制测试其它 FunASR 版本，把 `.env` 改为：
+AMD 包还会默认写入 `ASR_FUNASR_ALLOW_ROCM_PARAFORMER=false` 和 `ASR_FUNASR_ROCM_SAFE_VERSIONS=1.4.1`。因此 `paraformer`、`paraformer_full`、`seaco_paraformer`、`paraformer_large`、`paraformer_spk`、`paraformer_online`、`paraformer_streaming` 在 FunASR 版本不是 1.4.1 时会被标记为不可用，避免点击切换后服务直接退出。安装脚本会把依赖修复到 1.4.1；要强制测试其它 FunASR 版本，把 `.env` 改为：
 
 ```env
 ASR_FUNASR_ALLOW_ROCM_PARAFORMER=true

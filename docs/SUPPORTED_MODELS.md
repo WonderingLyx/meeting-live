@@ -8,10 +8,13 @@
 | --- | --- | --- | --- | --- | --- |
 | `sensevoice_zh` | SenseVoice-Small Chinese | `iic/SenseVoiceSmall` | 中文/粤语会议快速转写 | `funasr` | 中文固定语言，中文会议优先测试 |
 | `sensevoice` | SenseVoice-Small | `iic/SenseVoiceSmall` | 中文/英语/粤语/日语/韩语 | `funasr` | 多语种轻量对照 |
+| `sensevoice_spk` | SenseVoice-Small + Speaker Tags | `iic/SenseVoiceSmall + fsmn-vad + cam++` | 中文快速转写 + 匿名段级说话人标签 | `funasr` | 只作对照，不替代项目声纹/分离 |
 | `paraformer` | Paraformer | `paraformer-zh` | 中文会议/访谈离线转写 | `funasr` | 稳定中文基线 |
 | `paraformer_full` | Paraformer + VAD + Punc | `paraformer-zh + fsmn-vad + ct-punc` | 较长中文会议、自动断句标点 | `funasr` | 首次会下载 ASR、VAD、标点模型 |
+| `seaco_paraformer` | SeACo Paraformer Hotword | `iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch` | 人名、部门名、项目名较多的中文会议 | `funasr` | 用 `ASR_FUNASR_HOTWORDS` 配热词 |
 | `paraformer_large` | Paraformer Large | `iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch` | 高质量普通话离线转写 | `funasr` | 适合质量对照 |
 | `paraformer_spk` | Paraformer + Speaker Tags | `paraformer-zh + fsmn-vad + ct-punc + cam++` | 带 FunASR 内部 speaker 标签的转写 | `funasr` | 只作对照，不替代项目声纹/pyannote |
+| `paraformer_online` | Paraformer Online | `iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online` | 中文实时低延迟对照 | `funasr` | 当前适配层仍按 VAD 段调用 |
 | `paraformer_streaming` | Paraformer Streaming | `paraformer-zh-streaming` | 低延迟中文实时字幕 | `funasr` | 当前适配层仍按 VAD 段调用 |
 | `qwen3` | Qwen3-ASR | `Qwen/Qwen3-ASR-0.6B` | 高质量中文/多语种离线转写 | `qwen_asr` 等 | 可选 `ASR_WORD_TIMESTAMPS=true` 启用 forced aligner |
 | `plugin:<id>` | 外部 ASR 插件 | 由 `config/asr_plugins*.json` 定义 | 自定义 | 自定义 | 用于接入 faster-whisper、whisper.cpp、sherpa-onnx 等 |
@@ -58,8 +61,9 @@
 
 ## 中文会议推荐顺序
 
-1. 先试 `funasr_campplus`：对中文友好，沿用项目已有 FunASR 依赖和 ModelScope 缓存，不需要 HF_TOKEN。
-2. 中文 ASR 效果不稳定时试 `funasr_sensevoice_campplus`；中英混合会议试 `funasr_campplus_cn_en`。
-3. 离线对比精度时试 `funasr_paraformer_large_campplus`；`funasr_eres2netv2` 是实验项，先用设置页“测试连接/加载”确认本机 FunASR 支持。
-4. 再试 `pyannote_community`：分离能力强，但需要 Hugging Face gated 模型授权；AMD Windows ROCm 环境下建议先用 CPU 验证。
-5. 需要 ONNX/纯本地命令时用 `sherpa_onnx_cli`：命令里可用 `{input}` 和 `{output}` 占位符，输出 JSON 或 RTTM 即可接入。
+1. ASR 先试 `sensevoice_zh`：下载小、速度快、中文固定语言，适合 AMD Windows 先验证链路。
+2. 专名、人名识别不稳时试 `seaco_paraformer`，并在 `.env` 写 `ASR_FUNASR_HOTWORDS`。
+3. 实时延迟对照试 `paraformer_online` 或 `paraformer_streaming`；当前项目仍按 VAD 语音段调用，不是逐 token 真流式。
+4. 上传长会议对照试 `paraformer_full` / `paraformer_large`；说话人标签对照试 `sensevoice_spk` / `paraformer_spk`。
+5. 说话人分离先试 `funasr_campplus`：对中文友好，沿用项目已有 FunASR 依赖和 ModelScope 缓存，不需要 HF_TOKEN。
+6. 再试 `pyannote_community`：分离能力强，但需要 Hugging Face gated 模型授权；AMD Windows ROCm 环境下建议先用 CPU 验证。

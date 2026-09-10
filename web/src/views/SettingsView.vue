@@ -114,7 +114,7 @@ const asrGpuNames = computed(() => {
   return devices.map((d) => d.name).filter(Boolean).join(' / ')
 })
 const asrList = computed(() => {
-  const order = ['sensevoice_zh', 'paraformer_full', 'paraformer', 'qwen3', 'paraformer_large', 'sensevoice', 'paraformer_spk', 'paraformer_streaming']
+  const order = ['sensevoice_zh', 'sensevoice_spk', 'paraformer_full', 'seaco_paraformer', 'paraformer', 'paraformer_online', 'qwen3', 'paraformer_large', 'sensevoice', 'paraformer_spk', 'paraformer_streaming']
   const e = asrEngines.value
   return [...order.filter((k) => e[k]), ...Object.keys(e).filter((k) => !order.includes(k))]
 })

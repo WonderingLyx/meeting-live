@@ -17,16 +17,20 @@
 - **能力来源**: 后端 `/v1/models` 返回,可通过 `ASR_CAPABILITIES_JSON` / `ASR_CAPABILITIES_FILE` 配置覆盖
 - **适用**:
   - SenseVoice Chinese (`sensevoice_zh`): 中文固定语言快速转写,中文会议优先测试
+  - SenseVoice Speaker Tags (`sensevoice_spk`): SenseVoice + VAD + CAM++ 匿名 speaker 标签,用于和独立说话人分离对照
   - SenseVoice-Small: 多语种上传转写,模型更轻
   - Paraformer: 中文会议/访谈离线转写
   - Paraformer Full (`paraformer_full`): Paraformer + VAD + 标点,适合较长中文会议
+  - SeACo Paraformer (`seaco_paraformer`): 热词/专名增强中文模型,适合人名、部门名、项目名较多的会议
   - Paraformer Large (`paraformer_large`): ModelScope Paraformer Large,适合离线质量对照
   - Paraformer Speaker Tags (`paraformer_spk`): FunASR 内部 speaker 标签,只作对照
-  - Paraformer Streaming: 低延迟实时字幕
+  - Paraformer Online (`paraformer_online`): 明确使用 ModelScope 在线低延迟模型,用于实时延迟对照
+  - Paraformer Streaming (`paraformer_streaming`): FunASR 内置流式别名,低延迟实时字幕对照
 - **能力差异**:
   - FunASR 系列当前按段级结果接入,不提供 Qwen3 ForcedAligner 的 word timestamps
-  - `paraformer_spk` 的 speaker 标签来自 FunASR 当前音频块,不替代项目的 pyannote 分离或注册声纹身份识别
-  - Paraformer Streaming 表示模型适合流式/低延迟场景,但当前服务端展示不是 token-level 真流式逐 token 输出
+  - `sensevoice_spk` / `paraformer_spk` 的 speaker 标签来自 FunASR 当前音频块,不替代项目的 pyannote 分离或注册声纹身份识别
+  - `seaco_paraformer` 可通过 `ASR_FUNASR_HOTWORDS` 输入热词,适合中文会议里的姓名、组织和业务词
+  - Paraformer Online / Streaming 表示模型适合流式/低延迟场景,但当前服务端展示不是 token-level 真流式逐 token 输出
   - 切换 ASR 只改变转写模型,不会改变说话人识别算法;实时说话人由 Speaker Engine 完成,上传离线 diarization 可走 pyannote
 
 ### ASR: Qwen3-ASR-0.6B（高质量可选）
@@ -102,7 +106,8 @@
   4. 加 PESQ 量化指标,让用户看降噪前后质量差
 
 ### 其他小 ASR 候选
-- **Paraformer-small / Paraformer Streaming** (FunASR): 已作为可选 ASR 集成。
+- **SeACo Paraformer / Paraformer Online / SenseVoice Speaker Tags** (FunASR): 已作为可选 ASR 集成。
+- **Fun-ASR-Nano-2512 / Fun-ASR-MLT-Nano-2512** (FunASR): 上游标注为 800M 级模型，中文/多语种能力更强，但对当前 Windows AMD 包固定的 `funasr==1.4.1`、`transformers<5` 和 ROCm 稳定性风险更高。暂不内置为可切换项，建议先用独立环境验证后再接插件。
 - **Whisper-tiny**: 75MB,英文强,中文弱,延迟高。不推荐。
 - **Whisper-base**: 150MB,中文一般,延迟高。不推荐。
 - **WenetSpeech** 系列: 工业级,通常 1GB+,与本项目"小"原则不符。

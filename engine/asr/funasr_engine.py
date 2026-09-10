@@ -19,8 +19,10 @@ _ROCM_FUNASR_WARNING_EMITTED = False
 _ROCM_UNSAFE_FUNASR_KINDS = {
     "paraformer",
     "paraformer_full",
+    "seaco_paraformer",
     "paraformer_large",
     "paraformer_spk",
+    "paraformer_online",
     "paraformer_streaming",
 }
 _ROCM_KNOWN_STABLE_FUNASR_VERSIONS = {"1.4.1"}
@@ -215,6 +217,16 @@ class FunASREngine:
                     device=self.device,
                     disable_update=True,
                 )
+            elif self.kind == "sensevoice_spk":
+                self._model_name = "iic/SenseVoiceSmall + fsmn-vad + cam++"
+                self.model = AutoModel(
+                    model="iic/SenseVoiceSmall",
+                    vad_model="fsmn-vad",
+                    spk_model="cam++",
+                    vad_kwargs={"max_single_segment_time": 30000},
+                    device=self.device,
+                    disable_update=True,
+                )
             elif self.kind == "paraformer":
                 paraformer_kwargs = {
                     "model": "paraformer-zh",
@@ -231,6 +243,16 @@ class FunASREngine:
                 self._model_name = "paraformer-zh + fsmn-vad + ct-punc"
                 self.model = AutoModel(
                     model="paraformer-zh",
+                    vad_model="fsmn-vad",
+                    punc_model="ct-punc",
+                    vad_kwargs={"max_single_segment_time": 30000},
+                    device=self.device,
+                    disable_update=True,
+                )
+            elif self.kind == "seaco_paraformer":
+                self._model_name = "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+                self.model = AutoModel(
+                    model=self._model_name,
                     vad_model="fsmn-vad",
                     punc_model="ct-punc",
                     vad_kwargs={"max_single_segment_time": 30000},
@@ -255,6 +277,13 @@ class FunASREngine:
                     punc_model="ct-punc",
                     spk_model="cam++",
                     vad_kwargs={"max_single_segment_time": 30000},
+                    device=self.device,
+                    disable_update=True,
+                )
+            elif self.kind == "paraformer_online":
+                self._model_name = "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online"
+                self.model = AutoModel(
+                    model=self._model_name,
                     device=self.device,
                     disable_update=True,
                 )
@@ -317,7 +346,7 @@ class FunASREngine:
 
     def _transcribe_sync(self, audio_data: np.ndarray) -> ASRResult:
         kwargs: dict[str, Any] = {"input": audio_data.astype(np.float32)}
-        if self.kind in {"sensevoice", "sensevoice_zh"}:
+        if self.kind in {"sensevoice", "sensevoice_zh", "sensevoice_spk"}:
             kwargs.update({
                 "language": "zh" if self.kind == "sensevoice_zh" else "auto",
                 "use_itn": True,
@@ -325,7 +354,9 @@ class FunASREngine:
                 "merge_vad": True,
                 "merge_length_s": 15,
             })
-        elif self.kind == "paraformer_streaming":
+            if self.kind == "sensevoice_spk":
+                kwargs["language"] = "zh"
+        elif self.kind in {"paraformer_online", "paraformer_streaming"}:
             kwargs.update({
                 "cache": {},
                 "is_final": True,
@@ -381,7 +412,7 @@ class FunASREngine:
             if not isinstance(raw_item, dict):
                 text_parts.append(str(raw_item or ""))
                 continue
-            item_text = str(raw_item.get("text", "") or "")
+            item_text = cls._text_value(raw_item)
             text_parts.append(item_text)
             if language is None and raw_item.get("language"):
                 language = str(raw_item["language"])
@@ -422,12 +453,20 @@ class FunASREngine:
     def _sentence_segment(cls, value: Any) -> ASRSegment | None:
         if not isinstance(value, dict):
             return None
-        text = str(value.get("text", "") or "")
+        text = cls._text_value(value)
         if not text or "start" not in value or "end" not in value:
             return None
         return cls._segment_from_values(
             value, text, cls._explicit_words(value.get("timestamp"))
         )
+
+    @staticmethod
+    def _text_value(value: dict[str, Any]) -> str:
+        for key in ("text", "sentence", "raw_text"):
+            text = value.get(key)
+            if text:
+                return str(text)
+        return ""
 
     @classmethod
     def _segment_from_values(

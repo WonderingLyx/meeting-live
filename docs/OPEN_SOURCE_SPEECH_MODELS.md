@@ -6,7 +6,7 @@
 
 | 优先级 | 项目 / 模型 | 当前 star | 适合场景 | 本项目接入方式 | AMD Windows 注意点 |
 | --- | --- | ---: | --- | --- | --- |
-| 1 | [FunASR](https://github.com/modelscope/FunASR) / SenseVoice / Paraformer | 19,763 | 中文会议、访谈、普通话优先 | 已内置 `sensevoice_zh`、`sensevoice`、`paraformer`、`paraformer_full`、`paraformer_large`、`paraformer_spk`、`paraformer_streaming`；也可用插件接 FunASR CLI | 中文生态最好，先测 CPU 稳定性，再测 ROCm |
+| 1 | [FunASR](https://github.com/modelscope/FunASR) / SenseVoice / Paraformer | 19,763 | 中文会议、访谈、普通话优先 | 已内置 `sensevoice_zh`、`sensevoice_spk`、`sensevoice`、`paraformer`、`paraformer_full`、`seaco_paraformer`、`paraformer_large`、`paraformer_spk`、`paraformer_online`、`paraformer_streaming`；也可用插件接 FunASR CLI | 中文生态最好，先测 CPU 稳定性，再测 ROCm |
 | 2 | [Qwen3-ASR-0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) | HF 模型页 | 高质量中文/多语种离线转写 | 已内置 `qwen3` | 质量基线，但在 AMD Windows ROCm 上可能遇到算子/MIOpen 兼容问题 |
 | 3 | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) + Whisper large-v3/turbo | 24,847 | 多语种对照、word timestamps、成熟社区 | 已提供 `scripts/asr_plugins/faster_whisper_cli.py` 插件包装 | GPU 主要面向 CUDA/CTranslate2；AMD Windows 先按 CPU 测 |
 | 4 | [whisper.cpp](https://github.com/ggml-org/whisper.cpp) | 52,799 | 轻量 CLI、本地二进制、无 Python 依赖 | 用 `plugin:<id>` 接 whisper.cpp 命令或包装脚本 | CPU 很方便；Vulkan/其他后端可单独实验 |
@@ -16,7 +16,7 @@
 | 8 | [ESPnet](https://github.com/espnet/espnet) | 9,917 | 学术/多模型基准 | 命令插件或独立服务 | 依赖重，不建议作为第一批会议转写方案 |
 | 9 | [NVIDIA NeMo Speech](https://github.com/NVIDIA-NeMo/Speech) | 18,086 | NVIDIA CUDA 环境、研究模型对照 | 命令插件或独立服务 | 不适合你的 AMD Windows 作为主路线 |
 
-如果目标是中文会议，推荐先按这个顺序测：`sensevoice`、`paraformer`、`qwen3`、`plugin:faster_whisper_large_v3`、sherpa-onnx 中文模型。不要同时改 ASR 和声纹模型，否则很难判断问题来自哪一侧。
+如果目标是中文会议，推荐先按这个顺序测：`sensevoice_zh`、`seaco_paraformer`、`paraformer_full`、`paraformer_online`、`qwen3`、`plugin:faster_whisper_large_v3`、sherpa-onnx 中文模型。不要同时改 ASR 和声纹模型，否则很难判断问题来自哪一侧。
 
 ## 声纹 / 说话人识别候选
 
@@ -37,10 +37,10 @@
 
 | 目标 | 第一选择 | 对照选择 |
 | --- | --- | --- |
-| 中文会议准确率 | `qwen3`、`sensevoice`、`paraformer` | faster-whisper large-v3 |
+| 中文会议准确率 | `sensevoice_zh`、`seaco_paraformer`、`qwen3`、`paraformer_full` | faster-whisper large-v3 |
 | 本地速度 | `sensevoice`、`paraformer` | whisper.cpp、sherpa-onnx |
 | 字/词级时间戳 | `qwen3` 开启 forced aligner、faster-whisper | whisper.cpp JSON 输出 |
-| 实时字幕 | `paraformer_streaming` 当前仍按 VAD segment 调用 | sherpa-onnx streaming |
+| 实时字幕 | `paraformer_online` / `paraformer_streaming` 当前仍按 VAD segment 调用 | sherpa-onnx streaming |
 | 说话人匹配 | `campplus`、`campplus_cn_en` | `eres2net_large`、`ecapa_tdnn`、`wespeaker` |
 | 完整多人分离 | pyannote | sherpa-onnx diarization |
 

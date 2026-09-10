@@ -55,9 +55,12 @@ def test_asr_factory_aliases():
     assert get_asr_engine_info("qwen")["type"] == "qwen3"
     assert get_asr_engine_info("sensevoice-small")["type"] == "sensevoice"
     assert get_asr_engine_info("sensevoice-cn")["type"] == "sensevoice_zh"
+    assert get_asr_engine_info("sensevoice-speaker")["type"] == "sensevoice_spk"
     assert get_asr_engine_info("paraformer-punc")["type"] == "paraformer_full"
+    assert get_asr_engine_info("paraformer-hotword")["type"] == "seaco_paraformer"
     assert get_asr_engine_info("paraformer-large")["type"] == "paraformer_large"
     assert get_asr_engine_info("paraformer-speaker")["type"] == "paraformer_spk"
+    assert get_asr_engine_info("funasr-online")["type"] == "paraformer_online"
     assert get_asr_engine_info("funasr-streaming")["type"] == "paraformer_streaming"
 
 
@@ -73,10 +76,13 @@ def test_get_all_asr_engines_shape(monkeypatch):
     assert "qwen3" in data["engines"]
     assert "sensevoice" in data["engines"]
     assert "sensevoice_zh" in data["engines"]
+    assert "sensevoice_spk" in data["engines"]
     assert "paraformer" in data["engines"]
     assert "paraformer_full" in data["engines"]
+    assert "seaco_paraformer" in data["engines"]
     assert "paraformer_large" in data["engines"]
     assert "paraformer_spk" in data["engines"]
+    assert "paraformer_online" in data["engines"]
     assert "paraformer_streaming" in data["engines"]
     assert "sherpa_onnx" not in data["engines"]
     assert data["switching"] is False
@@ -169,10 +175,15 @@ def test_asr_engine_capabilities_are_explicit():
 
     qwen = get_asr_engine_info("qwen3")
     streaming = get_asr_engine_info("paraformer_streaming")
+    seaco = get_asr_engine_info("seaco_paraformer")
+    sensevoice_spk = get_asr_engine_info("sensevoice_spk")
     spk = get_asr_engine_info("paraformer_spk")
 
     assert qwen["capabilities"]["word_timestamps"] is True
     assert qwen["capabilities"]["speaker_diarization"] is False
+    assert "hotwords" in seaco["capabilities"]["recommended_for"]
+    assert seaco["capabilities"]["amd_windows"] == "prefer_cpu_first"
+    assert sensevoice_spk["capabilities"]["speaker_diarization"] == "provider_chunk_labels"
     assert streaming["capabilities"]["upload"] is True
     assert streaming["capabilities"]["true_streaming"] == "adapter_not_yet"
     assert streaming["capabilities"]["word_timestamps"] is False
@@ -205,16 +216,24 @@ def test_funasr_builtin_variants_load_expected_automodel(monkeypatch):
 
     FunASREngine._instances.clear()
     FunASREngine("sensevoice_zh")
+    FunASREngine("sensevoice_spk")
     FunASREngine("paraformer_full")
+    FunASREngine("seaco_paraformer")
     FunASREngine("paraformer_large")
     FunASREngine("paraformer_spk")
+    FunASREngine("paraformer_online")
 
     assert calls[0]["model"] == "iic/SenseVoiceSmall"
-    assert calls[1]["model"] == "paraformer-zh"
-    assert calls[1]["punc_model"] == "ct-punc"
-    assert calls[2]["model"] == "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+    assert calls[1]["model"] == "iic/SenseVoiceSmall"
+    assert calls[1]["spk_model"] == "cam++"
+    assert calls[2]["model"] == "paraformer-zh"
     assert calls[2]["punc_model"] == "ct-punc"
-    assert calls[3]["spk_model"] == "cam++"
+    assert calls[3]["model"] == "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+    assert calls[3]["punc_model"] == "ct-punc"
+    assert calls[4]["model"] == "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+    assert calls[4]["punc_model"] == "ct-punc"
+    assert calls[5]["spk_model"] == "cam++"
+    assert calls[6]["model"] == "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online"
 
 
 def test_funasr_rocm_cuda_defaults_to_cpu(monkeypatch):
